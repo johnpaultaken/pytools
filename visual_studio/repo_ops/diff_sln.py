@@ -1,19 +1,31 @@
-# usage:
-# diff_sln --remove "path\sln_to_remove.bin" --keep "path\sln_to_keep.bin"
-#     note: the bin file for a sln can be produced using parse_sln.py
+# 
+# Find all files you can delete from a visual studio sln you want to remove,
+# while keeping several other solutions,
+# without deleting shared files from sln you want to keep.
+# Usage:
+# diff_sln.py --remove "C:\path\removesln.bin"
+#             --keep "C:\path\keepsln1.bin"
+#             --keep "C:\path\keepsln2bin"
+#             --reporoot "C:\gitroot\\"
+#             --excludedir "C:\gitroot\do_not_remove\\"
+#
+# notes:
+# bin file for a sln can be produced using parse_sln.py.
+# parameters ending with \ must use escape \\
+# directory params must end with \\
+#
 
 import argparse
 import os.path
 import pickle
 from parse_sln import presults, get_filename_only
 
+
 def init_options():
-    # usage:
-    # diff_sln --remove "C:\path\removeSln.bin"  --keep "C:\path\keepSln.bin"  --keep "C:\path\keepAlsoSln.bin"
     arg_parser = argparse.ArgumentParser(
-        description="Find all files you can delete "
-                    "from a sln you want to remove "
-                    "without affecting common files of a sln you want to keep."
+        description="Find all files you can delete from a sln you want to remove,"
+                    " while keeping several other solutions,"
+                    " without deleting shared files from sln you want to keep."
                     "Note: bin file for a sln can be produced using parse_sln.py",
         conflict_handler='resolve',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -81,10 +93,9 @@ if __name__ == "__main__":
 
         remove_files = remove_results.files
 
-        print "generating removable files for solution ", remove_sln_name, '(' + str(len(remove_files)) + ')'
+        print "generating removable files for solution ",
+        print remove_sln_name, '(' + str(len(remove_files)) + ')'
         print " while keeping all files for the following solutions:"
-
-
 
     keep_files = set()
 
@@ -97,13 +108,15 @@ if __name__ == "__main__":
         with open(keep_sln, 'r') as fkeep:
             keep_results = pickle.load(fkeep)
 
-            print " ", get_filename_only(keep_sln), '(' + str(len(keep_results.files)) + ')'
+            print " ", get_filename_only(keep_sln),
+            print '(' + str(len(keep_results.files)) + ')'
             
             keep_files = set.union(keep_files, keep_results.files)
 
     remove_files = set.difference(remove_files, keep_files)
 
-    # since windows file path is case insensitive, vs project can specify the same file with different case.
+    # since windows file path is case insensitive,
+    # a VS project can specify the same file with different case.
     # So we have to do this.
     keep_files_lowercase = set()
     for filepath in keep_files:
@@ -126,12 +139,11 @@ if __name__ == "__main__":
         if can_remove and os.path.isfile(filepath):
             net_remove_files.add(to_git_path(filepath, args.reporoot))
 
-    print len(net_remove_files), "files can be removed excluding excludedirs and non-existant:"
+    print len(net_remove_files),
+    print "files can be removed excluding excludedirs and non-existant:"
 
     net_remove_name = remove_sln_name + "_remove_files.txt"
     with open(net_remove_name, 'w') as f:
         for filepath in sorted(net_remove_files):
             f.write(filepath + '\n')
             print filepath
-        
-

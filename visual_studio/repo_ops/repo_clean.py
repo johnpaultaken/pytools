@@ -3,7 +3,18 @@
 # while keeping all files referenced by specified visual studio solutions.
 # If remove type specified is 'sln' or 'proj' then removable files enumerated
 # will also include files referenced by the removable 'sln' or 'proj' files.
-# 
+# Usage:
+# repo_clean.py --repo "C:\gitroot"
+#               --removetype "cs"
+#               --keepsln "C:\path\keepsln1.bin"
+#               --keepsln "C:\path\keepsln2.bin"
+#               --excludedir "C:\gitroot\do_not_remove"
+#
+# notes:
+# bin file for a sln can be produced using parse_sln.py.
+# directory params must NOT end with \
+#
+
 
 import argparse
 import os.path
@@ -54,7 +65,6 @@ def init_options():
     args = arg_parser.parse_args()
     
     return args
-    
 
 
 if __name__ == "__main__":
@@ -101,9 +111,13 @@ if __name__ == "__main__":
         while len(unparsed_projects) > 0:
             results.projects_references.clear()
             parse_projrefs(unparsed_projects, results)
-            unparsed_projects = set.difference (results.projects_references, results.projects_in_sln)
+            unparsed_projects = set.difference (
+                results.projects_references, results.projects_in_sln
+            )
 
-        remove_files = set.union (results.files_references, results.projects_in_sln)
+        remove_files = set.union (
+            results.files_references, results.projects_in_sln
+        )
 
     keep_files = set()
 
@@ -119,7 +133,8 @@ if __name__ == "__main__":
         with open(keep_sln, 'r') as fkeep:
             keep_results = pickle.load(fkeep)
 
-            print " ", get_filename_only(keep_sln), '(' + str(len(keep_results.files)) + ')'
+            print " ", get_filename_only(keep_sln),
+            print '(' + str(len(keep_results.files)) + ')'
             
             keep_files = set.union(keep_files, keep_results.files)
 

@@ -1,5 +1,9 @@
-# usage:
-# parse_sln "C:\path\VS2015solution.sln"
+# 
+# Parse a Visual Studio 2015 sln file to find all files referenced by the sln
+# and the included projects.
+# Usage:
+# parse_sln.py "C:\path\MySolutionName.sln"
+#
 
 from xml.dom.minidom import parse
 import re
@@ -7,12 +11,11 @@ import argparse
 import os.path
 import pickle
 
+
 def init_options():
-    # usage:
-    # parse_sln "C:\path\VS2015solution.sln"
     arg_parser = argparse.ArgumentParser(
-        description="Parse a VS2015 sln file to "
-                    "print all files referenced by the sln and the included projects.",
+        description="Parse a VS2015 sln file to find all files"
+                    " referenced by the sln and the included projects.",
         conflict_handler='resolve',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
@@ -24,6 +27,7 @@ def init_options():
     )
 
     return arg_parser.parse_args()
+
 
 def get_absolute_path(rootfilepath, relativefilepath):
     up = 1;
@@ -37,10 +41,12 @@ def get_absolute_path(rootfilepath, relativefilepath):
 
     return rootfilepath + relativefilepath
 
+
 def get_filename_only(filepath):
     begin = filepath.rfind('\\') + 1
     end = filepath.rfind('.')
     return filepath[begin:end]
+
 
 def parse_proj(projpath, results):
 
@@ -119,6 +125,7 @@ def parse_sln(slnpath, results):
                 else:
                     print "project in solution does not exist: " , projpath
 
+
 class presults(object):
     def __init__(self):
         self.projects_in_sln = set()
@@ -140,7 +147,9 @@ if __name__ == "__main__":
 
     parse_sln(slnpath, results)
     
-    unparsed_projects = set.difference (results.projects_references, results.projects_in_sln)
+    unparsed_projects = set.difference (
+        results.projects_references, results.projects_in_sln
+    )
     if len(unparsed_projects) > 0:
         print 'Error: these project referenced projects not included in solution :'
         for unparsed_project in unparsed_projects:
@@ -150,7 +159,9 @@ if __name__ == "__main__":
     while len(unparsed_projects) > 0:
         results.projects_references.clear()
         parse_projrefs(unparsed_projects, results)
-        unparsed_projects = set.difference (results.projects_references, results.projects_in_sln)
+        unparsed_projects = set.difference (
+            results.projects_references, results.projects_in_sln
+        )
 
     results.files = set.union (results.files_references, results.projects_in_sln)
     

@@ -14,9 +14,8 @@ from os.path import relpath
 import copy
 import codecs
 
+
 def init_options():
-    # usage:
-    # find_ref --sln "path\sln_to_remove.bin" --ref "log4net"
     arg_parser = argparse.ArgumentParser(
         description="Update assembly references inside a specified visual"
                     " studio solution.",

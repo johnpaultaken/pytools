@@ -18,8 +18,6 @@ from update_ref import update_refs
 
 
 def init_options():
-    # usage:
-    # find_ref --sln "path\sln_to_remove.bin" --ref "log4net"
     arg_parser = argparse.ArgumentParser(
         description="Update assembly references outside a specified visual"
                     " studio solution.",
@@ -73,7 +71,6 @@ def init_options():
     """
     
     return args
-    
 
 
 if __name__ == "__main__":
@@ -159,5 +156,3 @@ if __name__ == "__main__":
     report_fname = args.ref + "_in_repo_outside_" + sln_name + ".txt"
     with open(report_fname, 'w') as freport:
         update_refs(args, diff_projects, diff_files, freport)
-    
-

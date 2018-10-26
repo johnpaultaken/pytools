@@ -4,6 +4,7 @@
 # usage:
 # find_ref --sln "path\sln_to_remove.bin" --ref "log4net"
 #     note: the bin file for a sln can be produced using parse_sln.py
+#
 
 import argparse
 import os.path
@@ -12,9 +13,8 @@ import re
 from xml.dom.minidom import parse
 from parse_sln import presults, get_filename_only, get_absolute_path
 
+
 def init_options():
-    # usage:
-    # find_ref --sln "path\sln_to_remove.bin" --ref "log4net"
     arg_parser = argparse.ArgumentParser(
         description="Find all projects and config files in a solution "
                     "that references a particular assembly. "
@@ -95,6 +95,7 @@ def parse_appconfig(filepath, refname, ref_appconfigs, freport):
                     ref_appconfigs.add(filepath)
                     freport.write(filepath + '\n')
                     freport.write(section.toxml() + '\n')
+
 
 def parse_proj(projpath, refname, ref_projects, freport):
 

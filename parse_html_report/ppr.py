@@ -10,7 +10,7 @@ from HTMLParser import HTMLParser
 def init_options():
     arg_parser = argparse.ArgumentParser(
         description="Parse a BMO NG risk performance report file to "
-                    "sum up compute times for MT tasks and ST tasks separately.",
+                    "sum up compute times for tasks grouped by pricer.",
         conflict_handler='resolve',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
@@ -18,19 +18,19 @@ def init_options():
     arg_parser.add_argument(
         "f",
         type=str,
-        help="full path to the performance report html file OR " \
+        help="file - full path to the performance report html file OR " \
             "full path to a file list of performance report html files."
     )
     
     arg_parser.add_argument(
         "-d",
-        help="print debug trace.",
+        help="debug - print debug trace.",
         action='store_true'
     )
 
     arg_parser.add_argument(
         "-s",
-        help="print compute time in seconds.",
+        help="seconds - print compute time in seconds.",
         action='store_true'
     )
 
@@ -38,27 +38,50 @@ def init_options():
         "-t",
         type=int,
         default=0,
-        help="print compute times of first T tasks only and exit."
+        help="tasks - print compute times of first T tasks only and exit."
     )
 
     arg_parser.add_argument(
-        "-g",
+        "-tsf",
+        type=int,
+        default=0,
+        help="tasks sorted by finish - print T tasks that finished last."
+    )
+
+    arg_parser.add_argument(
+        "-gp",
+        help="grouped by pricer - sum up task compute times grouped by" \
+            " pricer and sort by grid compute time.",
+        action='store_true',
+        default=True
+    )
+
+    arg_parser.add_argument(
+        "-gtg",
+        type=int,
+        default=0,
+        help="grouped by trade group - sum up task compute times grouped by" \
+            " trade group and show the G largest grid compute time ones."
+    )
+
+    arg_parser.add_argument(
+        "-ftg",
         type=str,
-        help="fetch trade groups from an alternate performance report file. " \
+        help="file trade groups - get trade groups from an alternate performance report file. " \
             "Sometimes trade groups are present only in RNIV_BASEPV runs."
     )
 
     arg_parser.add_argument(
-        "-c",
+        "-fc",
         type=str,
-        help="compare to another performance report file. " \
+        help="file compare - compare to another performance report file. " \
             "View grid compute time improvement wrt another run of same job."
     )
 
     arg_parser.add_argument(
-        "-cg",
+        "-fctg",
         type=str,
-        help="trade groups alternate file for compare to report." 
+        help="file compare trade groups - trade groups alternate file for compare report file." 
     )
     
     return arg_parser.parse_args()
@@ -119,20 +142,9 @@ class task_t(object):
         self.paths = paths
         self.status = status
         self.compute_time = compute_time
+        self.start = ''
+        self.finish = ''
 
-    def __str__(self):
-        return "grid {}    paths {:^7}  {:<7}".format(
-            self.compute_time,
-            self.paths,
-            self.status
-        )
-
-    def str_in_seconds(self):
-        return "grid {:>7,}    paths {:^7}  {:<7}".format(
-            self.compute_time.to_seconds(),
-            self.paths,
-            self.status
-        )
 
 class trade_group_t(object):
     def __init__(self):
@@ -224,7 +236,7 @@ class HTMLPerfReportParser(HTMLParser):
             num_tasks_to_parse,     # exit after parsing specified tasks
             isseconds,              # show durations in seconds
             isdebug,                # print debug trace
-            is_tradegroup_only,     # parse only html->body->jobdetails->tradegroup section
+            is_tradegroup_only,     # parse only html->body->job->jobdetails->tradegroup section
             alt_tradegroup_path,    # alternate perf report to use for trade groups 
                                     # if this report doesnt have tradegroup section
             results                 # out: results of parsing
@@ -242,6 +254,8 @@ class HTMLPerfReportParser(HTMLParser):
         self.last_task = None
         self.is_tgsection_present = False
         self.remaining_tasks_to_parse = self.num_tasks_to_parse
+        self.jobid = '?'
+        self.jobsummary = '?'
         self.task_signature = None
         self.omitted_signature = 'additional entries omitted'
 
@@ -252,10 +266,12 @@ class HTMLPerfReportParser(HTMLParser):
         self.jobid_pattern = re.compile(
             r'Job\s\[(\d*)\],\s*([A-Za-z]+\s?[A-Za-z]*),'
         )
-            
+
         # Duration = [00:00:03.159], Start = [00:13:54.897], End = [00:13:58.056], Computational = [2.11:34:03.159]
         self.computational_pattern = re.compile(
-            r'\s*Computational\s*=\s*\[(\d*).(\d*):(\d*):(\d*).(?:\d*)\]'
+            r',\s*Start\s*=\s*\[((?:\d|:)*).(?:\d*)\]\s*'
+            r',\s*End\s*=\s*\[((?:\d|:)*).(?:\d*)\]\s*'
+            r',\s*Computational\s*=\s*\[(\d*).(\d*):(\d*):(\d*).(?:\d*)\]'
         )
 
         self.is_legacy_format = None
@@ -324,12 +340,19 @@ class HTMLPerfReportParser(HTMLParser):
     # this Parser class
     #
     def next(self):
-        self.state = 'html->'
+        self.set_state ('html->')
         self.li_counters = {}
         self.last_task = None
         self.is_tgsection_present = False
         self.remaining_tasks_to_parse = self.num_tasks_to_parse
         self.task_signature = None     
+
+    def set_state(self, state):
+        if state is not self.state:
+            self.state = state
+
+            if self.isdebug:
+                print self.state
 
     def parse_jobid (self, data):
         jobmatch = self.jobid_pattern.search(data)
@@ -458,9 +481,7 @@ class HTMLPerfReportParser(HTMLParser):
         #print "Encountered start tag:", tag
         if tag == 'body':
             if self.state == 'html->':
-                self.state = 'html->body->'
-                if self.isdebug:
-                    print self.state
+                self.set_state ('html->body->')
             else:
                 raise Exception("state transition logic error")
         elif tag == 'li':
@@ -473,22 +494,25 @@ class HTMLPerfReportParser(HTMLParser):
         #print "Encountered end tag :", tag
         if tag == 'body':
             if self.state == 'html->body->':
-                self.state = 'html->'
-                if self.isdebug:
-                    print self.state
+                self.set_state ('html->')
             else:
                 raise Exception("state transition logic error")
         elif tag == 'a':
-            if self.state == 'html->body->jobdetails':
-                self.state = 'html->body->jobdetails->'
-                if self.isdebug:
-                    print self.state
-            elif self.state == 'html->body->jobdetails->tradegroup':
-                self.state = 'html->body->jobdetails->tradegroup->'
+            if self.state == 'html->body->job':
+                self.set_state ('html->body->job->')
+            elif self.state == 'html->body->job->jobdetails':
+                self.set_state ('html->body->job->jobdetails->')
+            elif self.state == 'html->body->job->jobdetails->tradegroup':
+                self.set_state ('html->body->job->jobdetails->tradegroup->')
                 self.is_tgsection_present = True
-                if self.isdebug:
-                    print self.state
-            elif self.state == 'html->body->grid':
+            elif self.state == 'html->body->job->grid':
+                self.set_state ('html->body->job->grid->')
+
+                # state transition special case 
+                if self.is_tradegroup_only:
+                    # no further parsing of this html is needed anymore
+                    self.set_state ('html->body->')
+                    self.result = None
 
                 if not self.is_tgsection_present:
                     if self.alt_tradegroup_path is not None:
@@ -513,38 +537,27 @@ class HTMLPerfReportParser(HTMLParser):
                             perfreport_parser.feed(perfreport_html)
                     else:
                         print "WARN: Performance report does not have section " + \
-                            "html->body->jobdetails->tradegroup"
-                            
-                if self.is_tradegroup_only:
-                    # no further parsing of this html is needed anymore
-                    self.result = None
-                    self.state = 'html->body->'
-                else:
-                    self.state = 'html->body->grid->'
-                if self.isdebug:
-                    print self.state
+                            "html->body->job->jobdetails->tradegroup"
                             
         elif tag == 'li':
             if self.state not in self.li_counters:
                 self.li_counters[self.state] = 0
                 
-            if self.state == 'html->body->jobdetails->':
+            if self.state == 'html->body->job->':
                 if self.li_counters[self.state] == 0:
-                    self.state = 'html->body->'
-                    if self.isdebug:
-                        print self.state
+                    self.set_state ('html->body->')
                 self.li_counters[self.state] -= 1
-            elif self.state == 'html->body->jobdetails->tradegroup->':
+            elif self.state == 'html->body->job->jobdetails->':
                 if self.li_counters[self.state] == 0:
-                    self.state = 'html->body->jobdetails->'
-                    if self.isdebug:
-                        print self.state
+                    self.set_state ('html->body->job->')
                 self.li_counters[self.state] -= 1
-            elif self.state == 'html->body->grid->':
+            elif self.state == 'html->body->job->jobdetails->tradegroup->':
                 if self.li_counters[self.state] == 0:
-                    self.state = 'html->body->'
-                    if self.isdebug:
-                        print self.state
+                    self.set_state ('html->body->job->jobdetails->')
+                self.li_counters[self.state] -= 1
+            elif self.state == 'html->body->job->grid->':
+                if self.li_counters[self.state] == 0:
+                    self.set_state ('html->body->job->')
                 self.li_counters[self.state] -= 1
                 
             assert self.li_counters[self.state] >= 0
@@ -553,30 +566,32 @@ class HTMLPerfReportParser(HTMLParser):
         #print "Encountered data  :", data
         if self.state == 'html->body->':
             if 'Job [' in data:
-                jobid = self.parse_jobid (data)
-                self.task_signature = str(jobid) + "#"
-            elif 'Job Details' == data:
-                self.state = 'html->body->jobdetails'
-                if self.isdebug:
-                    print self.state
+                self.set_state ('html->body->job')
+                self.jobid = self.parse_jobid (data)
+                self.task_signature = str(self.jobid) + "#"
+        elif self.state == 'html->body->job':
+            if 'Computational = [' in data:
+                self.jobsummary = data
+                print '---------- jobid:{} {} ----------'.format(
+                    self.jobid, self.jobsummary
+                )
+        elif self.state == 'html->body->job->':
+            if 'Job Details' == data:
+                self.set_state ('html->body->job->jobdetails')
             elif 'Component [Grid],' == data:
-                self.state = 'html->body->grid'
-                if self.isdebug:
-                    print self.state
-        elif self.state == 'html->body->jobdetails->':
+                self.set_state ('html->body->job->grid')
+        elif self.state == 'html->body->job->jobdetails->':
             if 'TradeGroup' == data:
-                self.state = 'html->body->jobdetails->tradegroup'
-                if self.isdebug:
-                    print self.state
-        elif self.state == 'html->body->jobdetails->tradegroup->':
+                self.set_state ('html->body->job->jobdetails->tradegroup')
+        elif self.state == 'html->body->job->jobdetails->tradegroup->':
             if '#TradeGroup#' in data:
                 # print data
                 tradegroup = trade_group_t()
                 self.parse_tradegroup (data, tradegroup)
                 self.parse_pos_pricer (data, tradegroup)
                 self.results.tradegroups[tradegroup.id] = tradegroup
-        elif self.state == 'html->body->grid->':
-            # TODO : '#MFL' is a weak pattern, but ok for now.
+        elif self.state == 'html->body->job->grid->':
+            
             if self.task_signature is None:
                 raise Exception("Job id not found !")
             
@@ -604,28 +619,50 @@ class HTMLPerfReportParser(HTMLParser):
                 computational_duration = self.computational_pattern.search(data)
                 if computational_duration:
                     # print computational_duration.group(0)
-                    days = int (computational_duration.group(1))
-                    hours = int (computational_duration.group(2))
-                    minutes = int (computational_duration.group(3))
-                    seconds = int (computational_duration.group(4))
+                    start = computational_duration.group(1)
+                    finish = computational_duration.group(2)
+                    days = int (computational_duration.group(3))
+                    hours = int (computational_duration.group(4))
+                    minutes = int (computational_duration.group(5))
+                    seconds = int (computational_duration.group(6))
 
                     if self.last_task is not None:
                         self.last_task.compute_time = duration_t(
                             days, hours, minutes, seconds
-                        ) 
+                        )
+                        self.last_task.start = start
+                        self.last_task.finish = finish
+                        
                         tradegroup = self.results.tradegroups[
                             self.last_task.tradegroup_id
                         ]
                         tradegroup.tasks.append(self.last_task)
                         
                         if self.remaining_tasks_to_parse > 0:
-                            print "{:<40}  {:>2} {}  positions {:<4}".format (
-                                tradegroup.pricer,
-                                ("MT" if tradegroup.cap_threads > 1 else "ST"),
-                                self.last_task.str_in_seconds() if self.isseconds 
-                                    else self.last_task,
-                                tradegroup.num_positions
-                            )
+                            if self.isseconds:
+                                print "{:<40}  {:>2} grid {:>7,}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+                                    tradegroup.pricer,
+                                    ("MT" if tradegroup.cap_threads > 1 else "ST"),
+                                    self.last_task.compute_time.to_seconds(),
+                                    tradegroup.id,
+                                    tradegroup.num_positions,
+                                    self.last_task.paths,
+                                    self.last_task.status,
+                                    self.last_task.start,
+                                    self.last_task.finish
+                                )
+                            else:
+                                print "{:<40}  {:>2} grid {}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+                                    tradegroup.pricer,
+                                    ("MT" if tradegroup.cap_threads > 1 else "ST"),
+                                    self.last_task.compute_time,
+                                    tradegroup.id,
+                                    tradegroup.num_positions,
+                                    self.last_task.paths,
+                                    self.last_task.status,
+                                    self.last_task.start,
+                                    self.last_task.finish
+                                )
                                 
                             self.remaining_tasks_to_parse -= 1
                             
@@ -641,7 +678,7 @@ class HTMLPerfReportParser(HTMLParser):
             elif self.omitted_signature in data:
                 # since <li>n additional entries omitted.</li> does not
                 # follow the convention of other <li> containing <a>
-                # 'html->body->grid->omitted' cannot be made yet another
+                # 'html->body->job->grid->omitted' cannot be made yet another
                 # self.state
                 omitted_match = self.omitted_pattern.search(data)
                 if omitted_match:
@@ -656,7 +693,7 @@ class HTMLPerfReportParser(HTMLParser):
     #
     def handle_comment(self, comment):
         #print "Encountered comment  :", comment
-        if self.state == 'html->body->grid->':
+        if self.state == 'html->body->job->grid->':
             if self.num_tasks_omitted > 0:
                 # parse commented out grid entries
                 # self.feed (comment) doesnt work. feed() doesnt seem to be recursive call capable.
@@ -938,11 +975,11 @@ if __name__ == "__main__":
 
     args = init_options()
 
-    results = process_input_file (args.f, args.t, args.s, args.d, args.g)
+    results = process_input_file (args.f, args.t, args.s, args.d, args.ftg)
     
-    if args.c is not None:
-        results_prev = process_input_file (args.c, args.t, args.s, args.d, args.cg)
+    if args.fc is not None:
+        results_prev = process_input_file (args.fc, args.t, args.s, args.d, args.fctg)
         
-        print_results_compare (args.f, results, args.c, results_prev)
+        print_results_compare (args.f, results, args.fc, results_prev)
     else:
         print_results (args.f, results, args.s)

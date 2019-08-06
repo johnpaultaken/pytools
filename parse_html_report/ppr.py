@@ -152,6 +152,25 @@ class pricer_result_t (object):
         
         return pr_sum
 
+
+class HTMLCallbackParser(HTMLParser):
+    def __init__(self, subscriber):
+        HTMLParser.__init__(self)
+        self.subscriber = subscriber
+
+    def handle_starttag(self, tag, attrs):
+        self.subscriber.handle_starttag (tag, attrs)
+
+    def handle_endtag(self, tag):
+        self.subscriber.handle_endtag (tag)
+
+    def handle_data(self, data):
+        self.subscriber.handle_data (data)
+
+    def handle_comment(self, comment):
+        self.subscriber.handle_comment (comment)
+
+
 #
 # The html body is organised as an unordered-list <ul>
 # where each item <li>
@@ -186,8 +205,12 @@ class HTMLPerfReportParser(HTMLParser):
         self.last_task = None
         self.is_tgsection_present = False
         self.remaining_tasks_to_parse = self.num_tasks_to_parse
-        self.task_signature = None     
-        
+        self.task_signature = None
+        self.omitted_signature = 'additional entries omitted'
+
+        self.callback_parser = HTMLCallbackParser (self)
+        self.num_tasks_omitted = 0
+
         # Job [4134826], Success,
         self.jobid_pattern = re.compile(
             r'Job\s\[(\d*)\],\s*([A-Za-z]+\s?[A-Za-z]*),'
@@ -252,6 +275,11 @@ class HTMLPerfReportParser(HTMLParser):
         # 4134834#MFL22, Unhandled Exception,
         self.task_nopath_pattern = re.compile(
             r'\d*#MFL(\d*),\s*([A-Za-z]+\s?[A-Za-z]*),'
+        )
+
+        # 4006 additional entries omitted.
+        self.omitted_pattern = re.compile(
+            r'(\d+)\s+additional entries omitted'
         )
 
     #
@@ -542,6 +570,35 @@ class HTMLPerfReportParser(HTMLParser):
                         raise Exception("report error: task not found before this computational_duration: " + data)
                 else:
                     raise Exception("parse error: computational_duration " + data)
+                
+            elif self.omitted_signature in data:
+                # since <li>n additional entries omitted.</li> does not
+                # follow the convention of other <li> containing <a>
+                # 'html->body->grid->omitted' cannot be made yet another
+                # self.state
+                omitted_match = self.omitted_pattern.search(data)
+                if omitted_match:
+                    self.num_tasks_omitted = int (omitted_match.group (1))
+                    print 'parsing', self.num_tasks_omitted, 'omitted tasks...'
+                else:
+                    print 'WARN: cannot parse omitted tasks pattern: ', data
+
+    #
+    # Tasks after a certain limit are commented out in performance report.
+    # However we still need to parse those.
+    #
+    def handle_comment(self, comment):
+        #print "Encountered comment  :", comment
+        if self.state == 'html->body->grid->':
+            if self.num_tasks_omitted > 0:
+                # parse commented out grid entries
+                # self.feed (comment) doesnt work. feed() doesnt seem to be recursive call capable.
+                self.callback_parser.feed (comment)
+                
+                self.num_tasks_omitted -= 1
+            else:
+                print 'WARN: more omitted tasks than reported: ', comment
+                pass
 
 def get_perfreport_paths_in (filepath):
     perfreport_paths = []

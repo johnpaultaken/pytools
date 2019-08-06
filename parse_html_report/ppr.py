@@ -151,9 +151,9 @@ class pricer_result_t (object):
 # unordered-lists.
 #
 class HTMLPerfReportParser(HTMLParser):
-    def __init__(self, num_tasks, isdebug, results):
+    def __init__(self, num_tasks_to_parse, isdebug, results):
         HTMLParser.__init__(self)
-        self.num_tasks = num_tasks
+        self.num_tasks_to_parse = num_tasks_to_parse
         self.isdebug = isdebug
         self.results = results
 
@@ -161,7 +161,14 @@ class HTMLPerfReportParser(HTMLParser):
         self.li_counters = {}
         self.last_task = None
         self.is_tgsection_present = False
+        self.remaining_tasks_to_parse = self.num_tasks_to_parse
+        self.task_signature = None     
         
+        # Job [4134826], Success,
+        self.jobid_pattern = re.compile(
+            r'Job\s\[(\d*)\],\s*([A-Za-z]+\s?[A-Za-z]*),'
+        )
+            
         # Duration = [00:00:03.159], Start = [00:13:54.897], End = [00:13:58.056], Computational = [2.11:34:03.159]
         self.computational_pattern = re.compile(
             r'\s*Computational\s*=\s*\[(\d*).(\d*):(\d*):(\d*).(?:\d*)\]'
@@ -170,15 +177,17 @@ class HTMLPerfReportParser(HTMLParser):
         self.is_legacy_format = None
         self.tradegroup_pattern = None
 
-        # TaskTradeGroupId = 1#80012#TradeGroup#1089#2019-04-11 00:00:00#2019-05-23 19:07:16#8#100#8000#100#False#8
-        # TaskTradeGroupId = 1#80012#TradeGroup#109#2019-04-11 00:00:00#2019-05-23 19:07:16#100#100#8000#100#True#1
+        # 1#80012#TradeGroup#1089#2019-04-11 00:00:00#2019-05-23 19:07:16#8#100#8000#100#False#8
+        # 1#80012#TradeGroup#109#2019-04-11 00:00:00#2019-05-23 19:07:16#100#100#8000#100#True#1
+        # 0#0_FxPv01PositionSpecificData#TradeGroup#0#2019-06-12 00:00:00#2019-06-13 05:55:26#13#999#1000#1000#False#1
         self.tradegroup_new_pattern = re.compile(
-            r'\d*#\d*#TradeGroup#(\d*)#(?:\d|\-|\s|\:)*#(?:\d|\-|\s|\:)*#\d*#\d*#\d*#\d*#(?:True|False)#(\d*)'
+            r'\d*#\d*_*\w*#TradeGroup#(\d*)#(?:\d|\-|\s|\:)*#(?:\d|\-|\s|\:)*#\d*#\d*#\d*#\d*#(?:True|False)#(\d*)'
         )
 
-        # TaskTradeGroupId = 1#80012#TradeGroup#1089#2019-04-11 00:00:00#2019-05-23 19:07:16#8#100#8000#100
+        # 1#80012#TradeGroup#1089#2019-04-11 00:00:00#2019-05-23 19:07:16#8#100#8000#100
+        # 0#0_FxPv01PositionSpecificData#TradeGroup#0#2019-06-12 00:00:00#2019-06-13 05:55:26#13#999#1000#1000#False
         self.tradegroup_legacy_pattern = re.compile(
-            r'\d*#\d*#TradeGroup#(\d*)#(?:\d|\-|\s|\:)*#(?:\d|\-|\s|\:)*#\d*#\d*#\d*#\d*'
+            r'\d*#\d*_*\w*#TradeGroup#(\d*)#(?:\d|\-|\s|\:)*#(?:\d|\-|\s|\:)*#\d*#\d*#\d*#\d*'
         )
 
         # No.Pos = 60 Pricing Credit.Cdx 
@@ -189,6 +198,7 @@ class HTMLPerfReportParser(HTMLParser):
 
         # 4900235#MFL1088#11:20, Success, 
         # 4900235#MFL1088#-1:-1, Success, 
+        # 4134834#MFL22, Success,
         self.task_pattern_success = re.compile(
             r'\d*#MFL(\d*)#(-?\d*:-?\d*),\s*(Success),'
         )
@@ -199,6 +209,46 @@ class HTMLPerfReportParser(HTMLParser):
         self.task_pattern = re.compile(
             r'\d*#MFL(\d*)#(-?\d*:-?\d*),\s*([A-Za-z]+\s?[A-Za-z]*),'
         )
+
+        # 4134826#110e107a-6553-4362-b9d4-a09dd0b44913#0:0, Success,
+        self.task_md_pattern_success = re.compile(
+            r'\d*#(\w*-\w*-\w*-\w*-\w*)#(-?\d*:-?\d*),\s*(Success),'
+        )
+        
+        # 4134826#110e107a-6553-4362-b9d4-a09dd0b44913#0:0, Unhandled Exception,
+        self.task_md_pattern = re.compile(
+            r'\d*#(\w*-\w*-\w*-\w*-\w*)#(-?\d*:-?\d*),\s*([A-Za-z]+\s?[A-Za-z]*),'
+        )
+        
+        # 4134834#MFL22, Success,
+        self.task_nopath_pattern_success = re.compile(
+            r'\d*#MFL(\d*),\s*(Success),'
+        )
+
+        # 4134834#MFL22, Unhandled Exception,
+        self.task_nopath_pattern = re.compile(
+            r'\d*#MFL(\d*),\s*([A-Za-z]+\s?[A-Za-z]*),'
+        )
+
+    #
+    # call before parsing another performance report with the same instance of
+    # this Parser class
+    #
+    def next(self):
+        self.state = 'html->'
+        self.li_counters = {}
+        self.last_task = None
+        self.is_tgsection_present = False
+        self.remaining_tasks_to_parse = self.num_tasks_to_parse
+        self.task_signature = None     
+
+    def parse_jobid (self, data):
+        jobmatch = self.jobid_pattern.search(data)
+        if jobmatch:
+            # print jobmatch.group(1)
+            return jobmatch.group(1)
+        else:
+            raise Exception("parse error: jobid  " + data)
 
     def parse_tradegroup (self, data, trade_group):
         if self.tradegroup_pattern == None:
@@ -214,15 +264,15 @@ class HTMLPerfReportParser(HTMLParser):
             
         tradegroup = self.tradegroup_pattern.search(data)
         if tradegroup:
-            # print tradegroup.group(0)
+            # print tradegroup.group(1)
             trade_group.id = tradegroup.group(1)
             trade_group.cap_threads = (
                 1 if self.is_legacy_format else (int (tradegroup.group(2)))
             )
         else:
-            raise Exception("parse error: TradeGroup ")
-            
-    def parse_task (self, data):
+            raise Exception("parse error: TradeGroup " + data)
+
+    def parse_regular_task (self, data):
         # first try to match a task success pattern
         task_match = self.task_pattern_success.search(data)
         
@@ -241,8 +291,71 @@ class HTMLPerfReportParser(HTMLParser):
                 None
             )
         else:
-            raise Exception("parse error: task " + data)
+            return None
+
+    def parse_md_task (self, data):
+        # first try to match a task success pattern
+        task_match = self.task_md_pattern_success.search(data)
         
+        # next try to match a task pattern of any failed status 
+        if not task_match:
+            task_match = self.task_md_pattern.search(data)
+            if task_match:
+                print "WARN: failed task ", data
+
+        if task_match:
+            # print task_match.group(1)
+            return task_t(
+                task_match.group(1), 
+                task_match.group(2), 
+                task_match.group(3),
+                None
+            )
+        else:
+            return None
+        
+    def parse_nopath_task (self, data):
+        # first try to match a task success pattern
+        task_match = self.task_nopath_pattern_success.search(data)
+        
+        # next try to match a task pattern of any failed status 
+        if not task_match:
+            task_match = self.task_nopath_pattern.search(data)
+            if task_match:
+                print "WARN: failed task ", data
+
+        if task_match:
+            # print task_match.group(1)
+            return task_t(
+                task_match.group(1), 
+                "", 
+                task_match.group(2),
+                None
+            )
+        else:
+            return None
+        
+    def parse_task (self, data):
+        task = None
+        
+        # first try to match a regular task 
+        if task is None:
+            task = self.parse_regular_task (data)
+        
+        # if that failed, try to match a MD task
+        if task is None:
+            task = self.parse_md_task (data)
+        
+        # if that failed, try to match a no path task
+        if task is None:
+            task = self.parse_nopath_task (data)
+
+        # if that also failed, throw exception
+        if task is None:
+            raise Exception("parse error: task " + data)
+        else:
+            return task
+
     def parse_pos_pricer (self, data, trade_group):
         pospricer = self.pos_pricer_pattern.search(data)
         if pospricer:
@@ -321,7 +434,10 @@ class HTMLPerfReportParser(HTMLParser):
     def handle_data(self, data):
         #print "Encountered data  :", data
         if self.state == 'html->body->':
-            if 'Job Details' == data:
+            if 'Job [' in data:
+                jobid = self.parse_jobid (data)
+                self.task_signature = str(jobid) + "#"
+            elif 'Job Details' == data:
                 self.state = 'html->body->jobdetails'
                 if self.isdebug:
                     print self.state
@@ -343,7 +459,10 @@ class HTMLPerfReportParser(HTMLParser):
                 self.results.tradegroups[tradegroup.id] = tradegroup
         elif self.state == 'html->body->grid->':
             # TODO : '#MFL' is a weak pattern, but ok for now.
-            if '#MFL' in data:
+            if self.task_signature is None:
+                raise Exception("Job id not found !")
+            
+            if self.task_signature in data:
                 # print data
                 # sanity check
                 if self.last_task is not None:
@@ -381,7 +500,7 @@ class HTMLPerfReportParser(HTMLParser):
                         ]
                         tradegroup.tasks.append(self.last_task)
                         
-                        if self.num_tasks > 0:
+                        if self.remaining_tasks_to_parse > 0:
                             print "{:<40}  {:>2} {}  positions {:<4}".format (
                                 tradegroup.pricer,
                                 ("MT" if tradegroup.cap_threads > 1 else "ST"),
@@ -389,16 +508,16 @@ class HTMLPerfReportParser(HTMLParser):
                                 tradegroup.num_positions
                             )
                                 
-                            self.num_tasks -= 1
+                            self.remaining_tasks_to_parse -= 1
                             
-                            if self.num_tasks == 0:
+                            if self.remaining_tasks_to_parse == 0:
                                 exit(0)
                                 
                         self.last_task = None
                     else:
-                        raise Exception("report error: task not found before this computational_duration")
+                        raise Exception("report error: task not found before this computational_duration: " + data)
                 else:
-                    raise Exception("parse error: computational_duration")
+                    raise Exception("parse error: computational_duration " + data)
 
 def get_perfreport_paths_in (filepath):
     perfreport_paths = []

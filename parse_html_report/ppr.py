@@ -32,7 +32,14 @@ def init_options():
         "-t",
         type=int,
         default=0,
-        help="print compute times of first n tasks only and exit."
+        help="print compute times of first T tasks only and exit."
+    )
+
+    arg_parser.add_argument(
+        "-c",
+        type=str,
+        help="compare to another performance report file. " \
+            "View grid compute time improvement wrt another run of same job."
     )
     
     return arg_parser.parse_args()
@@ -119,6 +126,11 @@ class parsed_results_t (object):
         # this stays across jobs
         self.pricers = {}
 
+        self.mt_duration = duration_t(0,0,0,0)
+        self.st_duration = duration_t(0,0,0,0)
+        self.num_mt_tasks = 0
+        self.num_st_tasks = 0
+
 
 class pricer_result_t (object):
     def __init__(self, pricer, cap_threads):
@@ -127,6 +139,18 @@ class pricer_result_t (object):
         self.num_tradegroups = 0
         self.num_tasks = 0
         self.compute_time = duration_t(0,0,0,0)
+
+    # to enable pricer results with same name but different cap_threads
+    # to be added together
+    def __add__(self, other):
+        assert (self.pricer == other.pricer)
+        
+        pr_sum = pricer_result_t (self.pricer, 0)
+        pr_sum.num_tradegroups = self.num_tradegroups + other.num_tradegroups
+        pr_sum.num_tasks = self.num_tasks + other.num_tasks
+        pr_sum.compute_time = self.compute_time + other.compute_time
+        
+        return pr_sum
 
 #
 # The html body is organised as an unordered-list <ul>
@@ -557,12 +581,8 @@ def parse_perfreport (projpath, num_tasks, isdebug, results):
     
     perfreport_parser.feed(perfreport_html)
 
-
-if __name__ == "__main__":
-
-    args = init_options()
-
-    filepath = str(args.f)
+def process_input_file (filepath):
+    filepath = str(filepath)
     filepath = filepath.replace('/', '\\')
     if not os.path.isfile(filepath):
         print "the specified input file does not exist: " , filepath
@@ -576,11 +596,6 @@ if __name__ == "__main__":
         perfreport_paths = get_perfreport_paths_in (filepath)
         
     results = parsed_results_t();
-    
-    mt_duration = duration_t(0,0,0,0)
-    st_duration = duration_t(0,0,0,0)
-    num_mt_tasks = 0
-    num_st_tasks = 0
     
     for perfreport_path in perfreport_paths:
         parse_perfreport (perfreport_path, args.t, args.d, results)
@@ -602,15 +617,18 @@ if __name__ == "__main__":
                 results.pricers[key].compute_time += task.compute_time
                 
                 if tradegroup.cap_threads > 1:
-                    num_mt_tasks += 1
-                    mt_duration += task.compute_time
+                    results.num_mt_tasks += 1
+                    results.mt_duration += task.compute_time
                 else:
-                    num_st_tasks += 1
-                    st_duration += task.compute_time
+                    results.num_st_tasks += 1
+                    results.st_duration += task.compute_time
             
         # clear only tradegroups but not pricers
         results.tradegroups.clear()
         
+    return results
+
+def print_results (input_file, results):
     # print tasks, groups and grid compute time by pricer
     
     sorted_results = sorted (
@@ -640,7 +658,7 @@ if __name__ == "__main__":
     
     # print total tasks and total grid compute time summary
     
-    input_file_name = get_filename_only(filepath)
+    input_file_name = get_filename_only(input_file)
 
     print(
         "\nSummary: {} ".format(
@@ -648,6 +666,112 @@ if __name__ == "__main__":
         )
     )
 
-    print "Number of tasks ST:MT is     ", num_st_tasks, " : ", num_mt_tasks
-    print "Compute time ST:MT is     ", st_duration.to_seconds(), " : ", mt_duration.to_seconds()
+    print "Number of tasks ST:MT is     ", results.num_st_tasks, " : ", results.num_mt_tasks
+    print "Compute time ST:MT is     ", results.st_duration, " : ", results.mt_duration
 
+#
+# Compare compute time in results to results_prev.
+# Print improvement as percentage compute time is reduced in results
+#
+def print_results_compare (input_file, results, input_file_prev, results_prev):
+    # print compute time reduction by pricer
+    print(
+        "\nGrid Compute time reduction for {} compared to {}".format(
+            get_filename_only (input_file),
+            get_filename_only (input_file_prev)
+        )
+    )
+    
+    # since we might be comparing an MT run against an ST run
+    # we cannot use the key of results.pricers which has _T appended, 
+    # where T is cap threads.
+    
+    pricers = {}
+    for value in results.pricers.values():
+        if value.pricer in pricers:
+            pricers[value.pricer] += value
+        else:
+            pricers[value.pricer] = value
+    
+    pricers_prev = {}
+    for value in results_prev.pricers.values():
+        if value.pricer in pricers_prev:
+            pricers_prev[value.pricer] += value
+        else:
+            pricers_prev[value.pricer] = value
+    
+    sorted_results = sorted (
+        pricers_prev.items(),
+        key=lambda item: item[1].compute_time.to_seconds(),
+        reverse=True
+    )
+    
+    max_pricer_name_len = 0
+    for item in sorted_results:
+        length = len(item[1].pricer)
+        if length > max_pricer_name_len:
+            max_pricer_name_len = length
+    
+    format_string = \
+        "{{:<{}}}  grid {{}} compared to {{}}   reduction {{:>3}}% {{}}". \
+        format (max_pricer_name_len + 4)
+    
+    for item in sorted_results:
+        current = pricers[item[0]].compute_time
+        previous = item[1].compute_time
+        cur = current.to_seconds()
+        prev = previous.to_seconds()
+        
+        comparable = (
+            item[1].num_tradegroups == pricers[item[0]].num_tradegroups
+            and
+            item[1].num_tasks == pricers[item[0]].num_tasks
+        )
+        
+        reduction = int (round ((prev - cur) * 100.0 / prev))
+        
+        print format_string.format (
+            item[1].pricer,
+            current,
+            previous,
+            reduction,
+            "" if comparable else "ERROR: tasks in perf reports don't match."
+        )
+    
+    # print total compute time reduction
+    
+    current = results.st_duration + results.mt_duration
+    previous = results_prev.st_duration + results_prev.mt_duration
+    cur = current.to_seconds()
+    prev = previous.to_seconds()
+    
+    comparable = (
+        (results.num_st_tasks + results.num_mt_tasks)
+        ==
+        (results_prev.num_st_tasks + results_prev.num_mt_tasks)
+    )
+    
+    reduction = int (round ((prev - cur) * 100.0 / prev))
+    
+    print "-------------------------------------------------------------------"
+    print format_string.format (
+        "TOTAL: ",
+        current,
+        previous,
+        reduction,
+        "" if comparable else "ERROR: tasks in perf reports don't match."
+    )
+  
+
+if __name__ == "__main__":
+
+    args = init_options()
+
+    results = process_input_file (args.f)
+    
+    if args.c is not None:
+        results_prev = process_input_file (args.c)
+        
+        print_results_compare (args.f, results, args.c, results_prev)
+    else:
+        print_results (args.f, results)

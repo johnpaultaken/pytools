@@ -35,10 +35,10 @@ def init_options():
     )
 
     arg_parser.add_argument(
-        "-t",
+        "-tsc",
         type=int,
         default=0,
-        help="tasks - print compute times of first T tasks only and exit."
+        help="tasks sorted by compute - print T tasks that took most grid compute."
     )
 
     arg_parser.add_argument(
@@ -46,6 +46,12 @@ def init_options():
         type=int,
         default=0,
         help="tasks sorted by finish - print T tasks that finished last."
+    )
+
+    arg_parser.add_argument(
+        "-ttg",
+        type=int,
+        help="tasks of trade-group - print tasks that belong to the trade-group."
     )
 
     arg_parser.add_argument(
@@ -233,18 +239,20 @@ class HTMLCallbackParser(HTMLParser):
 class HTMLPerfReportParser(HTMLParser):
     def __init__(
             self, 
-            num_tasks_to_parse,     # exit after parsing specified tasks
-            isseconds,              # show durations in seconds
-            isdebug,                # print debug trace
+            num_tasks_to_print,     # exit after parsing specified tasks
+            fn_print_task,          # function to be used to print the specified tasks
+            in_seconds,             # show durations in seconds
+            is_debug,               # print debug trace
             is_tradegroup_only,     # parse only html->body->job->jobdetails->tradegroup section
             alt_tradegroup_path,    # alternate perf report to use for trade groups 
                                     # if this report doesnt have tradegroup section
             results                 # out: results of parsing
         ):
         HTMLParser.__init__(self)
-        self.num_tasks_to_parse = num_tasks_to_parse
-        self.isseconds = isseconds
-        self.isdebug = isdebug
+        self.num_tasks_to_parse = num_tasks_to_print
+        self.fn_print_task = fn_print_task
+        self.in_seconds = in_seconds
+        self.is_debug = is_debug
         self.is_tradegroup_only = is_tradegroup_only
         self.alt_tradegroup_path = alt_tradegroup_path
         self.results = results
@@ -351,7 +359,7 @@ class HTMLPerfReportParser(HTMLParser):
         if state is not self.state:
             self.state = state
 
-            if self.isdebug:
+            if self.is_debug:
                 print self.state
 
     def parse_jobid (self, data):
@@ -526,8 +534,9 @@ class HTMLPerfReportParser(HTMLParser):
                             perfreport_parser = (
                                 HTMLPerfReportParser (
                                     0, 
-                                    self.isseconds, 
-                                    self.isdebug, 
+                                    None,
+                                    self.in_seconds, 
+                                    self.is_debug, 
                                     True, 
                                     None,  # third alternative can go here
                                     self.results
@@ -538,7 +547,7 @@ class HTMLPerfReportParser(HTMLParser):
                     else:
                         print "WARN: Performance report does not have section " + \
                             "html->body->job->jobdetails->tradegroup"
-                            
+
         elif tag == 'li':
             if self.state not in self.li_counters:
                 self.li_counters[self.state] = 0
@@ -639,30 +648,11 @@ class HTMLPerfReportParser(HTMLParser):
                         tradegroup.tasks.append(self.last_task)
                         
                         if self.remaining_tasks_to_parse > 0:
-                            if self.isseconds:
-                                print "{:<40}  {:>2} grid {:>7,}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
-                                    tradegroup.pricer,
-                                    ("MT" if tradegroup.cap_threads > 1 else "ST"),
-                                    self.last_task.compute_time.to_seconds(),
-                                    tradegroup.id,
-                                    tradegroup.num_positions,
-                                    self.last_task.paths,
-                                    self.last_task.status,
-                                    self.last_task.start,
-                                    self.last_task.finish
-                                )
-                            else:
-                                print "{:<40}  {:>2} grid {}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
-                                    tradegroup.pricer,
-                                    ("MT" if tradegroup.cap_threads > 1 else "ST"),
-                                    self.last_task.compute_time,
-                                    tradegroup.id,
-                                    tradegroup.num_positions,
-                                    self.last_task.paths,
-                                    self.last_task.status,
-                                    self.last_task.start,
-                                    self.last_task.finish
-                                )
+                            self.fn_print_task (
+                                self.last_task, 
+                                tradegroup, 
+                                self.in_seconds
+                            )
                                 
                             self.remaining_tasks_to_parse -= 1
                             
@@ -733,9 +723,9 @@ def get_perfreport_paths_in (filepath):
 
 def parse_perfreport (
         projpath, 
-        num_tasks, 
-        isseconds, 
-        isdebug, 
+        print_num_tasks, 
+        in_seconds, 
+        is_debug, 
         alt_tradegroup_path, 
         results
 ):
@@ -747,9 +737,10 @@ def parse_perfreport (
     
         perfreport_parser = (
             HTMLPerfReportParser (
-                num_tasks, 
-                isseconds, 
-                isdebug, 
+                print_num_tasks, 
+                print_task,
+                in_seconds, 
+                is_debug, 
                 False, 
                 alt_tradegroup_path, 
                 results
@@ -758,7 +749,84 @@ def parse_perfreport (
         
         perfreport_parser.feed(perfreport_html)
 
-def process_input_file (filepath, num_tasks, isseconds, isdebug, alt_tradegroup_path):
+def print_task (task, tradegroup, in_seconds):
+    if in_seconds:
+        print "{:<40}  {:>2} grid {:>7,}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+            tradegroup.pricer,
+            ("MT" if tradegroup.cap_threads > 1 else "ST"),
+            task.compute_time.to_seconds(),
+            tradegroup.id,
+            tradegroup.num_positions,
+            task.paths,
+            task.status,
+            task.start,
+            task.finish
+        )
+    else:
+        print "{:<40}  {:>2} grid {}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+            tradegroup.pricer,
+            ("MT" if tradegroup.cap_threads > 1 else "ST"),
+            task.compute_time,
+            tradegroup.id,
+            tradegroup.num_positions,
+            task.paths,
+            task.status,
+            task.start,
+            task.finish
+        )
+
+def print_tradegroup (tradegroup, perfreport_path, in_seconds):
+    # sort by grid compute time
+    sorted_tasks = sorted (
+        tradegroup.tasks,
+        key=lambda task: task.compute_time.to_seconds(),
+        reverse=True
+    )
+
+    print
+    for task in sorted_tasks:
+        print_task (task, tradegroup, in_seconds)
+
+def process_tradegroup_results (
+        results, 
+        perfreport_path, 
+        print_tradegroup_id, 
+        in_seconds
+):
+    for tradegroup in results.tradegroups.values():
+        # Some jobs are ST irrespective of pricer. 
+        # That can create two entries for a pricer when aggregating reports.
+        key = tradegroup.pricer + '_' + str(tradegroup.cap_threads)
+        if key not in results.pricers:
+            results.pricers[key] = (
+                pricer_result_t (tradegroup.pricer, tradegroup.cap_threads)
+            )
+            
+        results.pricers[key].num_tradegroups += 1
+        
+        for task in tradegroup.tasks:
+            results.pricers[key].num_tasks += 1
+            
+            results.pricers[key].compute_time += task.compute_time
+            
+            if tradegroup.cap_threads > 1:
+                results.num_mt_tasks += 1
+                results.mt_duration += task.compute_time
+            else:
+                results.num_st_tasks += 1
+                results.st_duration += task.compute_time
+
+        if int(tradegroup.id) == print_tradegroup_id:
+            print_tradegroup (tradegroup, perfreport_path, in_seconds)
+
+def process_input_file (
+        filepath, 
+        print_num_tasks, 
+        in_seconds, 
+        is_debug, 
+        alt_tradegroup_path,
+        print_tradegroup_id
+):
     filepath = str(filepath)
     filepath = filepath.replace('/', '\\')
     if not os.path.isfile(filepath):
@@ -787,42 +855,26 @@ def process_input_file (filepath, num_tasks, isseconds, isdebug, alt_tradegroup_
     for perfreport_path in perfreport_paths:
         parse_perfreport (
             perfreport_path, 
-            num_tasks, 
-            isseconds, 
-            isdebug, 
+            print_num_tasks, 
+            in_seconds, 
+            is_debug, 
             alt_tradegroup_path,
             results
         )
         
-        for tradegroup in results.tradegroups.values():
-            # Some jobs are ST irrespective of pricer. 
-            # That can create two entries for a pricer when aggregating reports.
-            key = tradegroup.pricer + '_' + str(tradegroup.cap_threads)
-            if key not in results.pricers:
-                results.pricers[key] = (
-                    pricer_result_t (tradegroup.pricer, tradegroup.cap_threads)
-                )
-                
-            results.pricers[key].num_tradegroups += 1
-            
-            for task in tradegroup.tasks:
-                results.pricers[key].num_tasks += 1
-                
-                results.pricers[key].compute_time += task.compute_time
-                
-                if tradegroup.cap_threads > 1:
-                    results.num_mt_tasks += 1
-                    results.mt_duration += task.compute_time
-                else:
-                    results.num_st_tasks += 1
-                    results.st_duration += task.compute_time
-            
-        # clear only tradegroups but not pricers
+        process_tradegroup_results (
+            results, 
+            perfreport_path, 
+            print_tradegroup_id, 
+            in_seconds
+        )
+        
+        # clear only tradegroup results but not pricer results
         results.tradegroups.clear()
         
     return results
 
-def print_results (input_file, results, isseconds):
+def print_results (input_file, results, in_seconds):
     # print tasks, groups and grid compute time by pricer
     
     sorted_results = sorted (
@@ -841,11 +893,12 @@ def print_results (input_file, results, isseconds):
         "{{:<{}}}  {{:>2}} grid {{}}   groups {{:<4}}  tasks {{:<4}}". \
         format (max_pricer_name_len + 4)
     
+    print
     for item in sorted_results:
         print format_string.format (
             item[1].pricer,
             ("MT" if item[1].cap_threads > 1 else "ST"),
-            '{:>10,}'.format(item[1].compute_time.to_seconds()) if isseconds
+            '{:>10,}'.format(item[1].compute_time.to_seconds()) if in_seconds
                 else item[1].compute_time,
             item[1].num_tradegroups,
             item[1].num_tasks
@@ -866,7 +919,7 @@ def print_results (input_file, results, isseconds):
         results.num_mt_tasks
     )
 
-    if isseconds:
+    if in_seconds:
         print "Compute time ST:MT is    {:>10,} : {:<10,}".format (
             results.st_duration.to_seconds(),
             results.mt_duration.to_seconds()
@@ -924,6 +977,7 @@ def print_results_compare (input_file, results, input_file_prev, results_prev):
         "{{:<{}}}  grid {{}} compared to {{}}   reduction {{:>3}}% {{}}". \
         format (max_pricer_name_len + 4)
     
+    print
     for item in sorted_results:
         current = pricers[item[0]].compute_time
         previous = item[1].compute_time
@@ -975,10 +1029,10 @@ if __name__ == "__main__":
 
     args = init_options()
 
-    results = process_input_file (args.f, args.t, args.s, args.d, args.ftg)
+    results = process_input_file (args.f, args.tsc, args.s, args.d, args.ftg, args.ttg)
     
     if args.fc is not None:
-        results_prev = process_input_file (args.fc, args.t, args.s, args.d, args.fctg)
+        results_prev = process_input_file (args.fc, args.tsc, args.s, args.d, args.fctg, args.ttg)
         
         print_results_compare (args.f, results, args.fc, results_prev)
     else:

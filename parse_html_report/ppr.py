@@ -29,6 +29,12 @@ def init_options():
     )
 
     arg_parser.add_argument(
+        "-s",
+        help="print compute time in seconds.",
+        action='store_true'
+    )
+
+    arg_parser.add_argument(
         "-t",
         type=int,
         default=0,
@@ -108,6 +114,12 @@ class task_t(object):
             self.status
         )
 
+    def str_in_seconds(self):
+        return "grid {:>7,}    paths {:^7}  {:<7}".format(
+            self.compute_time.to_seconds(),
+            self.paths,
+            self.status
+        )
 
 class trade_group_t(object):
     def __init__(self):
@@ -194,9 +206,10 @@ class HTMLCallbackParser(HTMLParser):
 # unordered-lists.
 #
 class HTMLPerfReportParser(HTMLParser):
-    def __init__(self, num_tasks_to_parse, isdebug, results):
+    def __init__(self, num_tasks_to_parse, isseconds, isdebug, results):
         HTMLParser.__init__(self)
         self.num_tasks_to_parse = num_tasks_to_parse
+        self.isseconds = isseconds
         self.isdebug = isdebug
         self.results = results
 
@@ -556,7 +569,8 @@ class HTMLPerfReportParser(HTMLParser):
                             print "{:<40}  {:>2} {}  positions {:<4}".format (
                                 tradegroup.pricer,
                                 ("MT" if tradegroup.cap_threads > 1 else "ST"),
-                                self.last_task,
+                                self.last_task.str_in_seconds() if self.isseconds 
+                                    else self.last_task,
                                 tradegroup.num_positions
                             )
                                 
@@ -627,18 +641,18 @@ def get_perfreport_paths_in (filepath):
         
     return perfreport_paths
 
-def parse_perfreport (projpath, num_tasks, isdebug, results):
+def parse_perfreport (projpath, num_tasks, isseconds, isdebug, results):
 
     print "parsing performance report: {}".format (get_filename_only (projpath))
     
     with open(projpath, 'r') as perfreport_file:
         perfreport_html = perfreport_file.read().replace('\n', '')
     
-    perfreport_parser = HTMLPerfReportParser (num_tasks, isdebug, results)
+    perfreport_parser = HTMLPerfReportParser (num_tasks, isseconds, isdebug, results)
     
     perfreport_parser.feed(perfreport_html)
 
-def process_input_file (filepath):
+def process_input_file (filepath, num_tasks, isseconds, isdebug):
     filepath = str(filepath)
     filepath = filepath.replace('/', '\\')
     if not os.path.isfile(filepath):
@@ -655,7 +669,7 @@ def process_input_file (filepath):
     results = parsed_results_t();
     
     for perfreport_path in perfreport_paths:
-        parse_perfreport (perfreport_path, args.t, args.d, results)
+        parse_perfreport (perfreport_path, num_tasks, isseconds, isdebug, results)
         
         for tradegroup in results.tradegroups.values():
             # Some jobs are ST irrespective of pricer. 
@@ -685,7 +699,7 @@ def process_input_file (filepath):
         
     return results
 
-def print_results (input_file, results):
+def print_results (input_file, results, isseconds):
     # print tasks, groups and grid compute time by pricer
     
     sorted_results = sorted (
@@ -708,7 +722,8 @@ def print_results (input_file, results):
         print format_string.format (
             item[1].pricer,
             ("MT" if item[1].cap_threads > 1 else "ST"),
-            item[1].compute_time,
+            '{:>10,}'.format(item[1].compute_time.to_seconds()) if isseconds
+                else item[1].compute_time,
             item[1].num_tradegroups,
             item[1].num_tasks
         )
@@ -723,8 +738,21 @@ def print_results (input_file, results):
         )
     )
 
-    print "Number of tasks ST:MT is     ", results.num_st_tasks, " : ", results.num_mt_tasks
-    print "Compute time ST:MT is     ", results.st_duration, " : ", results.mt_duration
+    print "Number of tasks ST:MT is  {} : {}".format (
+        results.num_st_tasks,
+        results.num_mt_tasks
+    )
+
+    if isseconds:
+        print "Compute time ST:MT is    {:>10,} : {:<10,}".format (
+            results.st_duration.to_seconds(),
+            results.mt_duration.to_seconds()
+        )
+    else:
+        print "Compute time ST:MT is    {} : {}".format (
+            results.st_duration,
+            results.mt_duration
+        )
 
 #
 # Compare compute time in results to results_prev.
@@ -824,11 +852,11 @@ if __name__ == "__main__":
 
     args = init_options()
 
-    results = process_input_file (args.f)
+    results = process_input_file (args.f, args.t, args.s, args.d)
     
     if args.c is not None:
-        results_prev = process_input_file (args.c)
+        results_prev = process_input_file (args.c, args.t, args.s, args.d)
         
         print_results_compare (args.f, results, args.c, results_prev)
     else:
-        print_results (args.f, results)
+        print_results (args.f, results, args.s)

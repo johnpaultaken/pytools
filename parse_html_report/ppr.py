@@ -42,10 +42,23 @@ def init_options():
     )
 
     arg_parser.add_argument(
+        "-g",
+        type=str,
+        help="fetch trade groups from an alternate performance report file. " \
+            "Sometimes trade groups are present only in RNIV_BASEPV runs."
+    )
+
+    arg_parser.add_argument(
         "-c",
         type=str,
         help="compare to another performance report file. " \
             "View grid compute time improvement wrt another run of same job."
+    )
+
+    arg_parser.add_argument(
+        "-cg",
+        type=str,
+        help="trade groups alternate file for compare to report." 
     )
     
     return arg_parser.parse_args()
@@ -206,11 +219,22 @@ class HTMLCallbackParser(HTMLParser):
 # unordered-lists.
 #
 class HTMLPerfReportParser(HTMLParser):
-    def __init__(self, num_tasks_to_parse, isseconds, isdebug, results):
+    def __init__(
+            self, 
+            num_tasks_to_parse,     # exit after parsing specified tasks
+            isseconds,              # show durations in seconds
+            isdebug,                # print debug trace
+            is_tradegroup_only,     # parse only html->body->jobdetails->tradegroup section
+            alt_tradegroup_path,    # alternate perf report to use for trade groups 
+                                    # if this report doesnt have tradegroup section
+            results                 # out: results of parsing
+        ):
         HTMLParser.__init__(self)
         self.num_tasks_to_parse = num_tasks_to_parse
         self.isseconds = isseconds
         self.isdebug = isdebug
+        self.is_tradegroup_only = is_tradegroup_only
+        self.alt_tradegroup_path = alt_tradegroup_path
         self.results = results
 
         self.state = 'html->'
@@ -465,12 +489,41 @@ class HTMLPerfReportParser(HTMLParser):
                 if self.isdebug:
                     print self.state
             elif self.state == 'html->body->grid':
-                self.state = 'html->body->grid->'
+
                 if not self.is_tgsection_present:
-                    print "WARN: Performance report does not have section " + \
-                        "html->body->jobdetails->tradegroup"
+                    if self.alt_tradegroup_path is not None:
+                        print "parsing for trade groups: {}".format (
+                            get_filename_only (self.alt_tradegroup_path)
+                        )
+                        
+                        with open(self.alt_tradegroup_path, 'r') as perfreport_file:
+                            perfreport_html = perfreport_file.read().replace('\n', '')
+                        
+                            perfreport_parser = (
+                                HTMLPerfReportParser (
+                                    0, 
+                                    self.isseconds, 
+                                    self.isdebug, 
+                                    True, 
+                                    None,  # third alternative can go here
+                                    self.results
+                                )
+                            )
+                            
+                            perfreport_parser.feed(perfreport_html)
+                    else:
+                        print "WARN: Performance report does not have section " + \
+                            "html->body->jobdetails->tradegroup"
+                            
+                if self.is_tradegroup_only:
+                    # no further parsing of this html is needed anymore
+                    self.result = None
+                    self.state = 'html->body->'
+                else:
+                    self.state = 'html->body->grid->'
                 if self.isdebug:
                     print self.state
+                            
         elif tag == 'li':
             if self.state not in self.li_counters:
                 self.li_counters[self.state] = 0
@@ -641,24 +694,50 @@ def get_perfreport_paths_in (filepath):
         
     return perfreport_paths
 
-def parse_perfreport (projpath, num_tasks, isseconds, isdebug, results):
+def parse_perfreport (
+        projpath, 
+        num_tasks, 
+        isseconds, 
+        isdebug, 
+        alt_tradegroup_path, 
+        results
+):
 
     print "parsing performance report: {}".format (get_filename_only (projpath))
     
     with open(projpath, 'r') as perfreport_file:
         perfreport_html = perfreport_file.read().replace('\n', '')
     
-    perfreport_parser = HTMLPerfReportParser (num_tasks, isseconds, isdebug, results)
-    
-    perfreport_parser.feed(perfreport_html)
+        perfreport_parser = (
+            HTMLPerfReportParser (
+                num_tasks, 
+                isseconds, 
+                isdebug, 
+                False, 
+                alt_tradegroup_path, 
+                results
+            )
+        )
+        
+        perfreport_parser.feed(perfreport_html)
 
-def process_input_file (filepath, num_tasks, isseconds, isdebug):
+def process_input_file (filepath, num_tasks, isseconds, isdebug, alt_tradegroup_path):
     filepath = str(filepath)
     filepath = filepath.replace('/', '\\')
     if not os.path.isfile(filepath):
         print "the specified input file does not exist: " , filepath
         exit(0)
         
+    if alt_tradegroup_path is not None:
+        alt_tradegroup_path = str(alt_tradegroup_path)
+        alt_tradegroup_path = alt_tradegroup_path.replace('/', '\\')
+        if not os.path.isfile(alt_tradegroup_path):
+            print (
+                "the specified alternate file for trade groups does not exist: "
+                "{}".format(alt_tradegroup_path)
+            )
+            alt_tradegroup_path = None
+    
     perfreport_paths = []
     
     if filepath.endswith('html'):
@@ -669,7 +748,14 @@ def process_input_file (filepath, num_tasks, isseconds, isdebug):
     results = parsed_results_t();
     
     for perfreport_path in perfreport_paths:
-        parse_perfreport (perfreport_path, num_tasks, isseconds, isdebug, results)
+        parse_perfreport (
+            perfreport_path, 
+            num_tasks, 
+            isseconds, 
+            isdebug, 
+            alt_tradegroup_path,
+            results
+        )
         
         for tradegroup in results.tradegroups.values():
             # Some jobs are ST irrespective of pricer. 
@@ -852,10 +938,10 @@ if __name__ == "__main__":
 
     args = init_options()
 
-    results = process_input_file (args.f, args.t, args.s, args.d)
+    results = process_input_file (args.f, args.t, args.s, args.d, args.g)
     
     if args.c is not None:
-        results_prev = process_input_file (args.c, args.t, args.s, args.d)
+        results_prev = process_input_file (args.c, args.t, args.s, args.d, args.cg)
         
         print_results_compare (args.f, results, args.c, results_prev)
     else:

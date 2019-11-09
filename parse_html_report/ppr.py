@@ -217,9 +217,36 @@ class HTMLCallbackParser(HTMLParser):
 #
 # The html body is organised as an unordered-list <ul>
 # where each item <li>
-# is a name marked by <a>Name ...</a>.
+# contains a name marked by <a>Name ...</a>.
 # followed by zero or more recursive unordered-lists.
-# We are interested in a few of those inner lists with name hierarchy like
+# The current hierarchy is
+# Job
+#     <ul>
+#         Job Details
+#             <ul>
+#             <ul>
+#             <ul>
+#             <ul>
+#                TradeGroup
+#     <ul>
+#         Component [CnC]
+#             <ul>
+#                JobTask
+#                Provisioning
+#                ProcessResultsFile
+#         Component [Grid]
+#             <ul>
+#                Task1
+#                Task2
+#                ...
+#         Component [RWS]
+#             <ul>
+#                ProcessResultsFile
+#                    <ul>
+#                        file1
+#                        file2
+#
+# We are interested in a few of those <li><a>name</a> with name hierarchy like
 # Job -> Job Details -> TradeGroup
 # Job -> Component [Grid]
 #
@@ -229,12 +256,21 @@ class HTMLCallbackParser(HTMLParser):
 # Then when we see the end tag </a> for that Name, we transition to
 # new state called CurrentState->Name->
 # It is in this state that we start processing actual data.
-# This is because we want to skip similar looking data a) outside the inner lists
-# we are interested in, and b) in one case even inside the <a>Name...</a>
+# This is because we want to skip similar looking data 
+# a) outside the inner lists we are interested in
+# b) in one case even inside the <a>Name...</a>
 #
 # We exit state CurrentState->Name-> back to CurrentState-> when we see the 
-# end tag for the <li> enclosing <a>Name...</a> and its zero or more recursive
-# unordered-lists.
+# end tag for the <li> enclosing <a>Name...</a> . 
+# Detecting the matching </li> end tag for a state will require a li counter
+# for every state.
+# li counter of a newly entered state is assumed to be 0. 
+# When we see a <li> we increment li counter of current state.
+# When we see a </li> 
+# 1. if the current state li counter is already 0 we 
+#     a. exit the current state, goes to its outer state which makes it
+#        the new current state
+# 2. decrement the li counter of the current state.
 #
 class HTMLPerfReportParser(HTMLParser):
     def __init__(

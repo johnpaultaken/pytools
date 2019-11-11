@@ -1,3 +1,5 @@
+# Parse Performance Report tool.
+# Run help (-h) for description.
 # usage:
 # ppr "C:\path\jobid_performance.html"
 

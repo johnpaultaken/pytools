@@ -1,5 +1,7 @@
+# PErformance Daily Summary tool.
+# Run help (-h) for description.
 # usage:
-# ppr "C:\path\jobid_performance.html"
+# peds "C:\path_daily_perf_files\"
 
 import re
 import argparse

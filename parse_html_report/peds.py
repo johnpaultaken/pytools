@@ -8,7 +8,8 @@ import argparse
 import os.path
 from HTMLParser import HTMLParser
 from datetime import datetime 
-
+from os import listdir
+from os.path import isfile, join
 
 def init_options():
     arg_parser = argparse.ArgumentParser(
@@ -52,7 +53,25 @@ class job_t(object):
         self.end_compute = None
         self.start_resultwrite = None
         self.end_resultwrite = None
+    
+    def is_populated(self):
+        return (
+            self.id is not None and
+            self.start is not None and
+            self.end is not None and
+            self.start_provision is not None and
+            self.end_provision is not None and
+            self.start_compute is not None and
+            self.end_compute is not None and
+            self.start_resultwrite is not None and
+            self.end_resultwrite is not None
+        )
 
+
+class request_type:
+    DAILY_SUMMARY = 1
+    SINGLE_REPORT = 2
+    COMPARE_TWO = 3
 
 class results_t (object):
     def __init__(self):
@@ -64,6 +83,9 @@ class results_t (object):
         
         # end of days run
         self.end = None
+        
+        # type of request that produced this result
+        self.request = None
 
 
 class HTMLCallbackParser(HTMLParser):
@@ -364,7 +386,11 @@ def get_perfreport_paths_in_file (filepath):
     return perfreport_paths
 
 def get_perfreport_paths_in_dir (dirpath):
-    return []
+    filelist = [
+        join(dirpath, f) for f in listdir(dirpath) 
+        if isfile(join(dirpath, f)) and f.endswith('.html')
+    ]
+    return filelist
 
 def parse_perfreport (
         filepath, 
@@ -386,7 +412,7 @@ def parse_perfreport (
         
         perfreport_parser.feed(perfreport_html)
         
-        result.name = filename[filename.index('_') + 1 : filename.rindex('_')]
+        result.name = filename[filename.find('_') + 1 : filename.rfind('_')]
 
 def parse_perfreports (
         path, 
@@ -403,10 +429,13 @@ def parse_perfreports (
     
     if os.path.isfile(path):
         if path.endswith('html'):
+            results.request = request_type.SINGLE_REPORT
             perfreport_paths.append(path)
         else:
+            results.request = request_type.DAILY_SUMMARY
             perfreport_paths = get_perfreport_paths_in_file (path)
     else:
+        results.request = request_type.DAILY_SUMMARY
         perfreport_paths = get_perfreport_paths_in_dir (path)
         
     for perfreport_path in perfreport_paths:
@@ -420,12 +449,58 @@ def parse_perfreports (
         
         results.jobs.append(result)
 
-def draw_results (results, dt_origin):
+def print_results (results):
     for job in results.jobs:
-        attrs = vars(job)
-        for item in attrs.items():
-            print item[0], ': ', item[1]
-  
+        print job.id, job.name, job.status
+        print 'job:\t\t[', job.start, ' - ', job.end, ']'
+        print 'provision:\t[', job.start_provision, ' - ', job.end_provision, ']'
+        print 'compute:\t[', job.start_compute, ' - ', job.end_compute, ']'
+        print 'resultwrite:\t[', job.start_resultwrite, ' - ', job.end_resultwrite, ']'
+        print
+
+def draw_job (job, dt_origin, label_margin):
+    # unit duration 5 min
+    unit_duration = float (5 * 60)
+    tostart_units = (job.start - dt_origin).total_seconds() / unit_duration
+    # assume provisioning start date same as job start date
+    start_provision = datetime.combine (job.start.date(), job.start_provision.time())
+    provQ_units = (start_provision - job.start).total_seconds() / unit_duration
+    prov_units = (job.end_provision - job.start_provision).total_seconds() / unit_duration
+    compQ_units = (job.start_compute - job.end_provision).total_seconds() / unit_duration
+    comp_units = (job.end_compute - job.start_compute).total_seconds() / unit_duration
+    # assume compute end date same as job end date
+    end_compute = datetime.combine (job.end.date(), job.end_compute.time())
+    result_units = (job.end - end_compute).total_seconds() / unit_duration
+
+    tostart_units = int(round(tostart_units))
+    provQ_units = int(round(provQ_units))
+    prov_units = int(round(prov_units))
+    compQ_units = int(round(compQ_units))
+    comp_units = int(round(comp_units))
+    result_units = int(round(result_units))
+    
+    label = job.id + ' ' + job.name
+    label_format = '{{:>{}}}'.format(label_margin)
+    print label_format.format(label) + \
+        ' ' * tostart_units + \
+        '.' * provQ_units + \
+        '-' * prov_units + \
+        '.' * compQ_units + \
+        '=' * comp_units + \
+        '_' * result_units
+
+def draw_results (results):
+    origin = None
+    
+    jobs = [job for job in results.jobs if job.is_populated()]
+    
+    if results.request == request_type.DAILY_SUMMARY:
+        jobs = sorted (jobs, key=lambda job: job.start)
+        origin = jobs[0].start if len(jobs) > 0 else None
+    
+    label_margin = max ([len(job.name) + 1 + len(job.id) for job in jobs])
+    for job in jobs:
+        draw_job (job, origin if origin is not None else job.start, label_margin)
 
 if __name__ == "__main__":
 
@@ -435,4 +510,5 @@ if __name__ == "__main__":
     
     parse_perfreports (args.p, False, results)
     
-    draw_results (results, datetime.now())
+    draw_results (results)
+    print_results (results)

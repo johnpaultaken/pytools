@@ -3,6 +3,36 @@
 # usage:
 # peds "C:\path_daily_perf_files\"
 
+"""
+[ Job.Start - Provisioning.Start ]           Provisioning Queue (Provisioning allowed 10 at a time)
+[ Provisioning.Start - Provisioning.End ]    Provisioning
+[ Provisioning.End - Grid.Start    ]         DataSynapse Queue for engine availability
+[ Grid.Start - Grid.End    ]          Grid Compute on engines
+[ Grid.End - RWS.Start ]              Results accumulating in buffer. RWS.Start is the first result buffer flush to disk and stage to db.
+[ RWS.Start - Job.End ]               Results getting written to db, not continuously, but in buffered chunks, at regular interval or when current buffer gets full.
+
+example for job 4149345:
+Job        Start = [2019-08-07 00:10:57.417], End = [2019-08-07 07:20:12.247]   pick
+Component [CnC]        Start = [00:10:57.417], End = [07:20:12.247]             dup Job ?
+Provisioning           Start = [02:18:39.951], End = [02:36:15.591]             pick
+ProcessResultsFile     Start = [07:19:49.905], End = [07:20:12.247]             start close to end of STAGE, end same as Job
+    SP_PUBLISH_PATH_RANGE_MESSAGE_F
+Component [Grid]       Start = [02:36:56.572], End = [07:08:54.090]             pick
+Component [RWS]        Start = [02:51:54.410], End = [07:19:14.007]             pick, dont need end (use job end instead because that's when results publish finishes)
+ProcessResultsFile     Start = [02:51:54.410], End = [07:19:14.007]             dup RWS
+    SP_STAGE_PATH_RANGE_MESSAGE_F & SP_STAGE_POSITION_VALUE_F for all files
+    SP_PUBLISH_POSITION_VALUE_F
+
+example for job 4147942:
+Job        Start = [2019-08-01 00:17:00.769], End = [2019-08-01 05:29:21.951]
+Component [CnC]        Start = [00:17:00.769], End = [05:29:21.951]
+Provisioning           Start = [00:47:56.394], End = [01:00:04.397]
+ProcessResultsFile     Start = [05:28:55.733], End = [05:29:21.951]
+Component [Grid]       Start = [01:01:02.849], End = [05:27:48.715]
+Component [RWS]        Start = [01:35:47.979], End = [05:28:24.508]
+ProcessResultsFile     Start = [01:35:47.979], End = [05:28:24.508]
+"""
+
 import re
 import argparse
 import os.path
@@ -10,6 +40,7 @@ from HTMLParser import HTMLParser
 from datetime import datetime 
 from os import listdir
 from os.path import isfile, join
+import copy
 
 def init_options():
     arg_parser = argparse.ArgumentParser(
@@ -66,6 +97,96 @@ class job_t(object):
             self.start_resultwrite is not None and
             self.end_resultwrite is not None
         )
+
+    #
+    # Figure out the correct date of parameter dtm which is a datetime with
+    # valid time but invalid date.
+    # We use the job's start date and end date to figure out the date of dtm.
+    # Assumption: We assume a job run cannot last more than 24 hrs ie end - start <= 24hrs.
+    # Now if dtm is one of the job's other datetime fields, 
+    # only one of the two following datetime combinations will be inside 
+    # the range [start - end]
+    # 1. datetime(start.date, dtm.time)   or
+    # 2. datetime(end.date, dtm.time)
+    #
+    def fill_out_date(self, dtm):
+        if dtm is None:
+            return None
+        
+        full_dt = datetime.combine (self.start.date(), dtm.time())
+        if full_dt >= self.start and full_dt <= self.end:
+            return full_dt
+
+        full_dt = datetime.combine (self.end.date(), dtm.time())
+        if full_dt >= self.start and full_dt <= self.end:
+            return full_dt
+
+        raise Exception(
+            "cannot place {} inside [{}-{}]".format(dtm.time(), self.start, self.end)
+        )
+
+    #
+    # Fill out omitted dates in the report file:-
+    # only job start and job end has a date in the report file,
+    # others starts and ends have time but not date.
+    # Their dates need to be determined from the job's start date and end date.
+    #
+    def fill_out_dates(self):
+        self.end_resultwrite = self.fill_out_date (self.end_resultwrite)
+        
+        self.start_resultwrite = self.fill_out_date (self.start_resultwrite)
+        
+        self.end_compute = self.fill_out_date (self.end_compute)
+        
+        self.start_compute = self.fill_out_date (self.start_compute)
+        
+        self.end_provision = self.fill_out_date (self.end_provision)
+        
+        self.start_provision = self.fill_out_date (self.start_provision)                
+        
+    #
+    # Patching of missing start_xxx / end_xxx in the report file:-
+    # [ Job.Start - Provisioning.Start ]           Provisioning Queue 
+    # [ Provisioning.Start - Provisioning.End ]    Provisioning
+    # [ Provisioning.End - Grid.Start    ]         DataSynapse Queue for engine 
+    # [ Grid.Start - Grid.End    ]          Grid Compute on engines
+    # [ Grid.End - RWS.Start ]              Results accumulating in buffer. 
+    # [ RWS.Start - Job.End ]               Results getting written to db.
+    # So the time points we are interested in are
+    # [ Job.Start, Provisioning.Start, Provisioning.End, Grid.Start, Grid.End, RWS.Start, Job.End ]
+    # Job.Start and Job.End has to be present, if any other are missing we just
+    # copy from the next one present in the sequence. 
+    # patched_job returns a new patched job, it doesn't modify self.   
+    #
+    def get_patched_job(self):
+        if self.start is None or self.end is None:
+            print "cannot patch datetimes for job {} {}".format (self.id, self.name)
+            return False
+        
+        patched_job = copy.deepcopy (self)
+        
+        if patched_job.end_resultwrite is None:
+            patched_job.end_resultwrite = patched_job.end
+            
+        if patched_job.start_resultwrite is None:
+            patched_job.start_resultwrite = patched_job.end_resultwrite
+            
+        if patched_job.end_compute is None:
+            patched_job.end_compute = patched_job.start_resultwrite
+            
+        if patched_job.start_compute is None:
+            patched_job.start_compute = patched_job.end_compute
+            
+        if patched_job.end_provision is None:
+            patched_job.end_provision = patched_job.start_compute
+            
+        if patched_job.start_provision is None:
+            patched_job.start_provision = patched_job.end_provision
+
+        return patched_job
+
+    def is_patchable(self):
+        return self.start is not None and self.end is not None
 
 
 class request_type:
@@ -492,7 +613,7 @@ def draw_job (job, dt_origin, label_margin):
 def draw_results (results):
     origin = None
     
-    jobs = [job for job in results.jobs if job.is_populated()]
+    jobs = [job.get_patched_job() for job in results.jobs if job.is_patchable()]
     
     if results.request == request_type.DAILY_SUMMARY:
         jobs = sorted (jobs, key=lambda job: job.start)
@@ -510,5 +631,8 @@ if __name__ == "__main__":
     
     parse_perfreports (args.p, False, results)
     
+    for job in results.jobs:
+        job.fill_out_dates()
+        
     draw_results (results)
     print_results (results)

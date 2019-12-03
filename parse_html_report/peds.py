@@ -580,18 +580,15 @@ def print_results (results):
         print
 
 def draw_job (job, dt_origin, label_margin):
-    # unit duration 5 min
-    unit_duration = float (5 * 60)
+    # one character width in draw represents a duration of this many minutes
+    draw_unit_in_minutes = 5
+    unit_duration = float (draw_unit_in_minutes * 60)
     tostart_units = (job.start - dt_origin).total_seconds() / unit_duration
-    # assume provisioning start date same as job start date
-    start_provision = datetime.combine (job.start.date(), job.start_provision.time())
-    provQ_units = (start_provision - job.start).total_seconds() / unit_duration
+    provQ_units = (job.start_provision - job.start).total_seconds() / unit_duration
     prov_units = (job.end_provision - job.start_provision).total_seconds() / unit_duration
     compQ_units = (job.start_compute - job.end_provision).total_seconds() / unit_duration
     comp_units = (job.end_compute - job.start_compute).total_seconds() / unit_duration
-    # assume compute end date same as job end date
-    end_compute = datetime.combine (job.end.date(), job.end_compute.time())
-    result_units = (job.end - end_compute).total_seconds() / unit_duration
+    result_units = (job.end - job.end_compute).total_seconds() / unit_duration
 
     tostart_units = int(round(tostart_units))
     provQ_units = int(round(provQ_units))

@@ -150,9 +150,10 @@ class task_t(object):
         self.paths = paths
         self.status = status
         self.compute_time = compute_time
-        self.start = ''
-        self.finish = ''
-
+        self.start = '?'
+        self.finish = '?'
+        self.num_processors = 0
+        self.engine = '?'
 
 class trade_group_t(object):
     def __init__(self):
@@ -381,6 +382,16 @@ class HTMLPerfReportParser(HTMLParser):
             r'(\d+)\s+additional entries omitted'
         )
 
+        # CMCBWDRSKGRD036-14 
+        self.task_engine_pattern = re.compile(
+            r'\s*(\w+\-\d+)\s'
+        )
+
+        # ProcessorCount = 20 
+        self.task_procs_pattern = re.compile(
+            r'ProcessorCount\s*=\s*(\d+)\s*'
+        )
+
     #
     # call before parsing another performance report with the same instance of
     # this Parser class
@@ -585,6 +596,14 @@ class HTMLPerfReportParser(HTMLParser):
                     else:
                         print "WARN: Performance report does not have section " + \
                             "html->body->job->jobdetails->tradegroup"
+            elif self.state == 'html->body->job->grid->task':
+                self.set_state ('html->body->job->grid->task->')
+            elif self.state == 'html->body->job->grid->task->taskdetails':
+                self.set_state ('html->body->job->grid->task->taskdetails->')
+            elif self.state == 'html->body->job->grid->task->taskdetails->hardware':
+                self.set_state ('html->body->job->grid->task->taskdetails->hardware->')
+            elif self.state == 'html->body->job->grid->task->taskdetails->misc':
+                self.set_state ('html->body->job->grid->task->taskdetails->misc->')
 
         elif tag == 'li':
             if self.state not in self.li_counters:
@@ -605,6 +624,39 @@ class HTMLPerfReportParser(HTMLParser):
             elif self.state == 'html->body->job->grid->':
                 if self.li_counters[self.state] == 0:
                     self.set_state ('html->body->job->')
+                self.li_counters[self.state] -= 1
+            elif self.state == 'html->body->job->grid->task->':
+                if self.li_counters[self.state] == 0:
+                    self.set_state ('html->body->job->grid->')
+                    tradegroup = self.results.tradegroups[
+                        self.last_task.tradegroup_id
+                    ]
+                    tradegroup.tasks.append(self.last_task)
+                    
+                    if self.remaining_tasks_to_parse > 0:
+                        self.fn_print_task (
+                            self.last_task, 
+                            tradegroup, 
+                            self.in_seconds
+                        )
+                            
+                        self.remaining_tasks_to_parse -= 1
+                        
+                        if self.remaining_tasks_to_parse == 0:
+                            exit(0)
+                    self.last_task = None
+                self.li_counters[self.state] -= 1
+            elif self.state == 'html->body->job->grid->task->taskdetails->':
+                if self.li_counters[self.state] == 0:
+                    self.set_state ('html->body->job->grid->task->')
+                self.li_counters[self.state] -= 1
+            elif self.state == 'html->body->job->grid->task->taskdetails->hardware->':
+                if self.li_counters[self.state] == 0:
+                    self.set_state ('html->body->job->grid->task->taskdetails->')
+                self.li_counters[self.state] -= 1
+            elif self.state == 'html->body->job->grid->task->taskdetails->misc->':
+                if self.li_counters[self.state] == 0:
+                    self.set_state ('html->body->job->grid->task->taskdetails->')
                 self.li_counters[self.state] -= 1
                 
             assert self.li_counters[self.state] >= 0
@@ -679,29 +731,12 @@ class HTMLPerfReportParser(HTMLParser):
                         )
                         self.last_task.start = start
                         self.last_task.finish = finish
-                        
-                        tradegroup = self.results.tradegroups[
-                            self.last_task.tradegroup_id
-                        ]
-                        tradegroup.tasks.append(self.last_task)
-                        
-                        if self.remaining_tasks_to_parse > 0:
-                            self.fn_print_task (
-                                self.last_task, 
-                                tradegroup, 
-                                self.in_seconds
-                            )
-                                
-                            self.remaining_tasks_to_parse -= 1
-                            
-                            if self.remaining_tasks_to_parse == 0:
-                                exit(0)
-                                
-                        self.last_task = None
                     else:
                         raise Exception("report error: task not found before this computational_duration: " + data)
                 else:
                     raise Exception("parse error: computational_duration " + data)
+                
+                self.set_state ('html->body->job->grid->task')
                 
             elif self.omitted_signature in data:
                 # since <li>n additional entries omitted.</li> does not
@@ -714,6 +749,28 @@ class HTMLPerfReportParser(HTMLParser):
                     print 'parsing', self.num_tasks_omitted, 'omitted tasks...'
                 else:
                     print 'WARN: cannot parse omitted tasks pattern: ', data
+        elif self.state == 'html->body->job->grid->task->':
+            if 'Task Details' == data:
+                self.set_state ('html->body->job->grid->task->taskdetails')
+        elif self.state == 'html->body->job->grid->task->taskdetails->':
+            if 'Hardware' == data:
+                self.set_state ('html->body->job->grid->task->taskdetails->hardware')
+            elif 'Miscellaneous' == data:
+                self.set_state ('html->body->job->grid->task->taskdetails->misc')
+        elif self.state == 'html->body->job->grid->task->taskdetails->hardware->':
+            if 'ProcessorCount' in data:
+                procs_match = self.task_procs_pattern.search(data)
+                if procs_match:
+                    self.last_task.num_processors = int (procs_match.group(1))
+                else:
+                    print 'WARN: cannot parse task num processors pattern in: ', data
+        elif self.state == 'html->body->job->grid->task->taskdetails->misc->':
+            if 'engine logs' in data:
+                engine_match = self.task_engine_pattern.search(data)
+                if engine_match:
+                    self.last_task.engine = engine_match.group(1)
+                else:
+                    print 'WARN: cannot parse task engine instance pattern in: ', data
 
     #
     # Tasks after a certain limit are commented out in performance report.
@@ -789,10 +846,12 @@ def parse_perfreport (
 
 def print_task (task, tradegroup, in_seconds):
     if in_seconds:
-        print "{:<40}  {:>2} grid {:>7,}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+        print "{:<40}  {:>2} grid {:>7,} {:<18}({:>2})    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time.to_seconds(),
+            task.engine,
+            task.num_processors,
             tradegroup.id,
             tradegroup.num_positions,
             task.paths,
@@ -801,10 +860,12 @@ def print_task (task, tradegroup, in_seconds):
             task.finish
         )
     else:
-        print "{:<40}  {:>2} grid {}    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+        print "{:<40}  {:>2} grid {} {:<18}({:>2})    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time,
+            task.engine,
+            task.num_processors,
             tradegroup.id,
             tradegroup.num_positions,
             task.paths,

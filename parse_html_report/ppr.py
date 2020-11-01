@@ -7,6 +7,7 @@ import re
 import argparse
 import os.path
 from HTMLParser import HTMLParser
+import sys
 
 
 def init_options():
@@ -40,36 +41,35 @@ def init_options():
         "-tsc",
         type=int,
         default=0,
-        help="tasks sorted by compute - print T tasks that took most grid compute."
+        help="tasks sorted by compute - print TSC tasks that took the most grid compute time."
     )
 
     arg_parser.add_argument(
         "-tsf",
         type=int,
         default=0,
-        help="tasks sorted by finish - print T tasks that finished last."
+        help="tasks sorted by finish - print TSF tasks that finished last."
     )
 
     arg_parser.add_argument(
         "-ttg",
         type=int,
-        help="tasks of trade-group - print tasks that belong to the trade-group."
+        default=-1,
+        help="tasks of trade-group - print tasks that belong to the trade-group TTG."
     )
 
     arg_parser.add_argument(
-        "-gp",
-        help="grouped by pricer - sum up task compute times grouped by" \
-            " pricer and sort by grid compute time.",
-        action='store_true',
-        default=True
-    )
-
-    arg_parser.add_argument(
-        "-gtg",
+        "-psc",
         type=int,
         default=0,
-        help="grouped by trade group - sum up task compute times grouped by" \
-            " trade group and show the G largest grid compute time ones."
+        help="pricers sorted by compute - print PSC pricers that took the most grid compute time."
+    )
+
+    arg_parser.add_argument(
+        "-gsc",
+        type=int,
+        default=0,
+        help="groups sorted by compute - print GSC trade groups that took the most grid compute time."
     )
 
     arg_parser.add_argument(
@@ -87,9 +87,9 @@ def init_options():
     )
 
     arg_parser.add_argument(
-        "-fctg",
+        "-fcftg",
         type=str,
-        help="file compare trade groups - trade groups alternate file for compare report file." 
+        help="file compare file trade groups - trade groups alternate file for compare report file." 
     )
     
     return arg_parser.parse_args()
@@ -161,23 +161,19 @@ class trade_group_t(object):
         self.pricer = None
         self.num_positions = None
         self.cap_threads = None
+        # a list of task_t
         self.tasks = []
 
 
-class parsed_results_t (object):
-    def __init__(self):
-        # this gets cleared across jobs
+# parsed result from one performance report file.
+class parse_result_t (object):
+    def __init__(self, filepath):
+        self.filepath = filepath
+        # maps trade group id to trade_group_t
         self.tradegroups = {}
-        
-        # this stays across jobs
-        self.pricers = {}
-
-        self.mt_duration = duration_t(0,0,0,0)
-        self.st_duration = duration_t(0,0,0,0)
-        self.num_mt_tasks = 0
-        self.num_st_tasks = 0
 
 
+# results accumulated for one pricer
 class pricer_result_t (object):
     def __init__(self, pricer, cap_threads):
         self.pricer = pricer
@@ -197,6 +193,21 @@ class pricer_result_t (object):
         pr_sum.compute_time = self.compute_time + other.compute_time
         
         return pr_sum
+
+
+# net results grouped by pricer.
+class net_result_by_pricer_t (object):
+    def __init__(self):
+        # maps pricer name to pricer_result_t
+        self.pricers = {}
+        
+        # all performance report filenames included in this net result
+        self.filenames = ""
+        
+        self.mt_duration = duration_t(0,0,0,0)
+        self.st_duration = duration_t(0,0,0,0)
+        self.num_mt_tasks = 0
+        self.num_st_tasks = 0
 
 
 class HTMLCallbackParser(HTMLParser):
@@ -288,7 +299,10 @@ class HTMLPerfReportParser(HTMLParser):
             results                 # out: results of parsing
         ):
         HTMLParser.__init__(self)
-        self.num_tasks_to_parse = num_tasks_to_print
+        if num_tasks_to_print == -1:
+            self.num_tasks_to_parse = sys.maxint
+        else:
+            self.num_tasks_to_parse = num_tasks_to_print
         self.fn_print_task = fn_print_task
         self.in_seconds = in_seconds
         self.is_debug = is_debug
@@ -874,7 +888,7 @@ def print_task (task, tradegroup, in_seconds):
             task.finish
         )
 
-def print_tradegroup (tradegroup, perfreport_path, in_seconds):
+def print_tradegroup (tradegroup, in_seconds):
     # sort by grid compute time
     sorted_tasks = sorted (
         tradegroup.tasks,
@@ -886,45 +900,52 @@ def print_tradegroup (tradegroup, perfreport_path, in_seconds):
     for task in sorted_tasks:
         print_task (task, tradegroup, in_seconds)
 
-def process_tradegroup_results (
-        results, 
-        perfreport_path, 
-        print_tradegroup_id, 
-        in_seconds
+def group_result_by_pricer (
+        result,
+        net_result_by_pricer
 ):
-    for tradegroup in results.tradegroups.values():
+    filename = get_filename_only(result.filepath)
+    net_result_by_pricer.filenames += filename
+    net_result_by_pricer.filenames += " "
+    
+    for tradegroup in result.tradegroups.values():
         # Some jobs are ST irrespective of pricer. 
         # That can create two entries for a pricer when aggregating reports.
         key = tradegroup.pricer + '_' + str(tradegroup.cap_threads)
-        if key not in results.pricers:
-            results.pricers[key] = (
+        if key not in net_result_by_pricer.pricers:
+            net_result_by_pricer.pricers[key] = (
                 pricer_result_t (tradegroup.pricer, tradegroup.cap_threads)
             )
             
-        results.pricers[key].num_tradegroups += 1
+        net_result_by_pricer.pricers[key].num_tradegroups += 1
         
         for task in tradegroup.tasks:
-            results.pricers[key].num_tasks += 1
+            net_result_by_pricer.pricers[key].num_tasks += 1
             
-            results.pricers[key].compute_time += task.compute_time
+            net_result_by_pricer.pricers[key].compute_time += task.compute_time
             
             if tradegroup.cap_threads > 1:
-                results.num_mt_tasks += 1
-                results.mt_duration += task.compute_time
+                net_result_by_pricer.num_mt_tasks += 1
+                net_result_by_pricer.mt_duration += task.compute_time
             else:
-                results.num_st_tasks += 1
-                results.st_duration += task.compute_time
+                net_result_by_pricer.num_st_tasks += 1
+                net_result_by_pricer.st_duration += task.compute_time
 
-        if int(tradegroup.id) == print_tradegroup_id:
-            print_tradegroup (tradegroup, perfreport_path, in_seconds)
+# group grid compute time and other info by pricer
+def group_results_by_pricer (results):
+    net_result_by_pricer = net_result_by_pricer_t ()
+    
+    for result in results:
+        group_result_by_pricer (result, net_result_by_pricer)
+
+    return net_result_by_pricer
 
 def process_input_file (
         filepath, 
         print_num_tasks, 
         in_seconds, 
         is_debug, 
-        alt_tradegroup_path,
-        print_tradegroup_id
+        alt_tradegroup_path
 ):
     filepath = str(filepath)
     filepath = filepath.replace('/', '\\')
@@ -949,38 +970,37 @@ def process_input_file (
     else:
         perfreport_paths = get_perfreport_paths_in (filepath)
         
-    results = parsed_results_t();
+    results = []
     
     for perfreport_path in perfreport_paths:
+        result = parse_result_t(perfreport_path)
+        
         parse_perfreport (
             perfreport_path, 
             print_num_tasks, 
             in_seconds, 
             is_debug, 
             alt_tradegroup_path,
-            results
+            result
         )
         
-        process_tradegroup_results (
-            results, 
-            perfreport_path, 
-            print_tradegroup_id, 
-            in_seconds
-        )
-        
-        # clear only tradegroup results but not pricer results
-        results.tradegroups.clear()
-        
+        results.append(result)
+                
     return results
 
-def print_results (input_file, results, in_seconds):
-    # print tasks, groups and grid compute time by pricer
-    
+# print grid compute time and other info by pricer
+def print_results_by_pricer (net_result_by_pricer, in_seconds, num_pricers): 
+    # 0 means all pricers
+    if num_pricers == -1:
+        num_pricers = len(net_result_by_pricer.pricers)
+
     sorted_results = sorted (
-        results.pricers.items(),
+        net_result_by_pricer.pricers.items(),
         key=lambda item: item[1].compute_time.to_seconds(),
         reverse=True
     )
+
+    sorted_results = sorted_results[: min(len(sorted_results), num_pricers)]
     
     max_pricer_name_len = 0
     for item in sorted_results:
@@ -1005,56 +1025,107 @@ def print_results (input_file, results, in_seconds):
     
     # print total tasks and total grid compute time summary
     
-    input_file_name = get_filename_only(input_file)
-
     print(
         "\nSummary: {} ".format(
-            input_file_name
+            net_result_by_pricer.filenames
         )
     )
 
     print "Number of tasks ST:MT is  {} : {}".format (
-        results.num_st_tasks,
-        results.num_mt_tasks
+        net_result_by_pricer.num_st_tasks,
+        net_result_by_pricer.num_mt_tasks
     )
 
     if in_seconds:
         print "Compute time ST:MT is    {:>10,} : {:<10,}".format (
-            results.st_duration.to_seconds(),
-            results.mt_duration.to_seconds()
+            net_result_by_pricer.st_duration.to_seconds(),
+            net_result_by_pricer.mt_duration.to_seconds()
         )
     else:
         print "Compute time ST:MT is    {} : {}".format (
-            results.st_duration,
-            results.mt_duration
+            net_result_by_pricer.st_duration,
+            net_result_by_pricer.mt_duration
+        )
+
+# print grid compute time and other info by trade group
+def print_results_by_tradegroup (
+        results, 
+        in_seconds, 
+        num_tradegroups
+    ):
+    pass
+
+# print grid compute time and other info by trade group
+def print_tradegroup_in_results (
+        results, 
+        in_seconds, 
+        tradegroup_id
+    ):
+    tradegroup_id = str (tradegroup_id)
+    for result in results:
+        if tradegroup_id in result.tradegroups:
+            print_tradegroup (
+                result.tradegroups[tradegroup_id],
+                in_seconds
+            )
+            break
+
+def print_results (
+        results, 
+        in_seconds, 
+        num_pricers, 
+        num_tradegroups, 
+        print_tradegroup_id
+    ): 
+    # if user forgot result options then print results by pricer as default
+    if num_pricers == 0 and num_tradegroups == 0 and print_tradegroup_id == -1:
+        num_pricers = -1
+
+    if num_pricers is not 0:
+        net_result_by_pricer = group_results_by_pricer (results)
+        
+        print_results_by_pricer (net_result_by_pricer, in_seconds, num_pricers)
+        
+    if num_tradegroups is not 0:
+        print_results_by_tradegroup (
+            results, in_seconds, num_tradegroups
+        )
+
+    if print_tradegroup_id > -1:
+        print_tradegroup_in_results (
+            results, in_seconds, print_tradegroup_id
         )
 
 #
 # Compare compute time in results to results_prev.
 # Print improvement as percentage compute time is reduced in results
 #
-def print_results_compare (input_file, results, input_file_prev, results_prev):
+def print_results_compare (results, compareto_results):
+    net_result_by_pricer = group_results_by_pricer (results)
+    
+    compareto_net_result_by_pricer = group_results_by_pricer (compareto_results)
+    
     # print compute time reduction by pricer
     print(
         "\nGrid Compute time reduction for {} compared to {}".format(
-            get_filename_only (input_file),
-            get_filename_only (input_file_prev)
+            net_result_by_pricer.filenames,
+            compareto_net_result_by_pricer.filenames
         )
     )
     
     # since we might be comparing an MT run against an ST run
-    # we cannot use the key of results.pricers which has _T appended, 
+    # we cannot use the key of net_result_by_pricer.pricers which has _T appended, 
     # where T is cap threads.
     
     pricers = {}
-    for value in results.pricers.values():
+    for value in net_result_by_pricer.pricers.values():
         if value.pricer in pricers:
             pricers[value.pricer] += value
         else:
             pricers[value.pricer] = value
     
     pricers_prev = {}
-    for value in results_prev.pricers.values():
+    for value in compareto_net_result_by_pricer.pricers.values():
         if value.pricer in pricers_prev:
             pricers_prev[value.pricer] += value
         else:
@@ -1101,15 +1172,26 @@ def print_results_compare (input_file, results, input_file_prev, results_prev):
     
     # print total compute time reduction
     
-    current = results.st_duration + results.mt_duration
-    previous = results_prev.st_duration + results_prev.mt_duration
+    current = ( 
+        net_result_by_pricer.st_duration + net_result_by_pricer.mt_duration
+    )
+    previous = (
+        compareto_net_result_by_pricer.st_duration + 
+        compareto_net_result_by_pricer.mt_duration
+    )
     cur = current.to_seconds()
     prev = previous.to_seconds()
     
     comparable = (
-        (results.num_st_tasks + results.num_mt_tasks)
+        (
+            net_result_by_pricer.num_st_tasks + 
+            net_result_by_pricer.num_mt_tasks
+        )
         ==
-        (results_prev.num_st_tasks + results_prev.num_mt_tasks)
+        (
+            compareto_net_result_by_pricer.num_st_tasks + 
+            compareto_net_result_by_pricer.num_mt_tasks
+        )
     )
     
     reduction = int (round ((prev - cur) * 100.0 / prev))
@@ -1128,11 +1210,11 @@ if __name__ == "__main__":
 
     args = init_options()
 
-    results = process_input_file (args.f, args.tsc, args.s, args.d, args.ftg, args.ttg)
+    results = process_input_file (args.f, args.tsc, args.s, args.d, args.ftg)
     
     if args.fc is not None:
-        results_prev = process_input_file (args.fc, args.tsc, args.s, args.d, args.fctg, args.ttg)
+        results_prev = process_input_file (args.fc, args.tsc, args.s, args.d, args.fcftg)
         
-        print_results_compare (args.f, results, args.fc, results_prev)
+        print_results_compare (results, results_prev)
     else:
-        print_results (args.f, results, args.s)
+        print_results (results, args.s, args.psc, args.gsc, args.ttg)

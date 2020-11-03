@@ -59,6 +59,13 @@ def init_options():
     )
 
     arg_parser.add_argument(
+        "-tp",
+        type=str,
+        help="tasks of pricer - print tasks that belong to the pricer TP."
+        "To limit the count shown, use together with option -tsc"
+    )
+
+    arg_parser.add_argument(
         "-psc",
         type=int,
         default=0,
@@ -92,7 +99,22 @@ def init_options():
         help="file compare file trade groups - trade groups alternate file for compare report file." 
     )
     
-    return arg_parser.parse_args()
+    args = arg_parser.parse_args()
+    
+    ### mend incomplete args where possible.
+    
+    # if user forgot result option then print results by pricer as default
+    if args.psc == 0 and args.gsc == 0 and args.ttg == -1 and args.tp is None \
+        and args.tsc == 0:
+        # -1 stands for all available
+        args.psc = -1
+
+    # if user specified tasks of pricer and did not specify numbers, default to all
+    if args.tp is not None and args.tsc == 0:
+        # -1 stands for all available
+        args.tsc = -1
+
+    return args
 
 def get_absolute_path(rootfilepath, relativefilepath):
     up = 1;
@@ -290,6 +312,7 @@ class HTMLPerfReportParser(HTMLParser):
     def __init__(
             self, 
             num_tasks_to_print,     # exit after parsing specified tasks
+            pricer_tasks_to_print,  # exit after parsing specified tasks from this pricer
             fn_print_task,          # function to be used to print the specified tasks
             in_seconds,             # show durations in seconds
             is_debug,               # print debug trace
@@ -303,6 +326,7 @@ class HTMLPerfReportParser(HTMLParser):
             self.num_tasks_to_parse = sys.maxint
         else:
             self.num_tasks_to_parse = num_tasks_to_print
+        self.pricer_tasks_to_print = pricer_tasks_to_print
         self.fn_print_task = fn_print_task
         self.in_seconds = in_seconds
         self.is_debug = is_debug
@@ -596,7 +620,8 @@ class HTMLPerfReportParser(HTMLParser):
                         
                             perfreport_parser = (
                                 HTMLPerfReportParser (
-                                    0, 
+                                    0,
+                                    None,
                                     None,
                                     self.in_seconds, 
                                     self.is_debug, 
@@ -648,16 +673,25 @@ class HTMLPerfReportParser(HTMLParser):
                     tradegroup.tasks.append(self.last_task)
                     
                     if self.remaining_tasks_to_parse > 0:
-                        self.fn_print_task (
-                            self.last_task, 
-                            tradegroup, 
-                            self.in_seconds
-                        )
+                        if (
+                            self.pricer_tasks_to_print is None or 
+                            (
+                             self.pricer_tasks_to_print is not None and 
+                             self.pricer_tasks_to_print == tradegroup.pricer
+                            )
+                        ):
+                            self.fn_print_task (
+                                self.last_task, 
+                                tradegroup, 
+                                self.in_seconds
+                            )
+                                
+                            self.remaining_tasks_to_parse -= 1
                             
-                        self.remaining_tasks_to_parse -= 1
-                        
-                        if self.remaining_tasks_to_parse == 0:
-                            exit(0)
+                            if self.remaining_tasks_to_parse == 0:
+                                # user must not wait any more
+                                exit(0)
+
                     self.last_task = None
                 self.li_counters[self.state] -= 1
             elif self.state == 'html->body->job->grid->task->taskdetails->':
@@ -833,6 +867,7 @@ def get_perfreport_paths_in (filepath):
 def parse_perfreport (
         projpath, 
         print_num_tasks, 
+        print_tasks_pricer,
         in_seconds, 
         is_debug, 
         alt_tradegroup_path, 
@@ -846,7 +881,8 @@ def parse_perfreport (
     
         perfreport_parser = (
             HTMLPerfReportParser (
-                print_num_tasks, 
+                print_num_tasks,
+                print_tasks_pricer,
                 print_task,
                 in_seconds, 
                 is_debug, 
@@ -942,7 +978,8 @@ def group_results_by_pricer (results):
 
 def process_input_file (
         filepath, 
-        print_num_tasks, 
+        print_num_tasks,
+        print_tasks_pricer,
         in_seconds, 
         is_debug, 
         alt_tradegroup_path
@@ -977,7 +1014,8 @@ def process_input_file (
         
         parse_perfreport (
             perfreport_path, 
-            print_num_tasks, 
+            print_num_tasks,
+            print_tasks_pricer,
             in_seconds, 
             is_debug, 
             alt_tradegroup_path,
@@ -1077,10 +1115,6 @@ def print_results (
         num_tradegroups, 
         print_tradegroup_id
     ): 
-    # if user forgot result options then print results by pricer as default
-    if num_pricers == 0 and num_tradegroups == 0 and print_tradegroup_id == -1:
-        num_pricers = -1
-
     if num_pricers is not 0:
         net_result_by_pricer = group_results_by_pricer (results)
         
@@ -1210,10 +1244,10 @@ if __name__ == "__main__":
 
     args = init_options()
 
-    results = process_input_file (args.f, args.tsc, args.s, args.d, args.ftg)
+    results = process_input_file (args.f, args.tsc, args.tp, args.s, args.d, args.ftg)
     
     if args.fc is not None:
-        results_prev = process_input_file (args.fc, args.tsc, args.s, args.d, args.fcftg)
+        results_prev = process_input_file (args.fc, args.tsc, args.tp, args.s, args.d, args.fcftg)
         
         print_results_compare (results, results_prev)
     else:

@@ -53,9 +53,9 @@ def init_options():
 
     arg_parser.add_argument(
         "-ttg",
-        type=int,
-        default=-1,
-        help="tasks of trade-group - print tasks that belong to the trade-group TTG."
+        action='append',
+        help="tasks of trade-group - print tasks that belong to the trade-group TTG. "
+        "This option can be used multiple times."
     )
 
     arg_parser.add_argument(
@@ -104,7 +104,7 @@ def init_options():
     ### mend incomplete args where possible.
     
     # if user forgot result option then print results by pricer as default
-    if args.psc == 0 and args.gsc == 0 and args.ttg == -1 and args.tp is None \
+    if args.psc == 0 and args.gsc == 0 and args.ttg is None and args.tp is None \
         and args.tsc == 0:
         # -1 stands for all available
         args.psc = -1
@@ -794,7 +794,9 @@ class HTMLPerfReportParser(HTMLParser):
                 omitted_match = self.omitted_pattern.search(data)
                 if omitted_match:
                     self.num_tasks_omitted = int (omitted_match.group (1))
-                    print 'parsing', self.num_tasks_omitted, 'omitted tasks...'
+                    # Do not print following in task print mode.
+                    if self.num_tasks_to_parse == 0:
+                        print 'parsing', self.num_tasks_omitted, 'omitted tasks...'
                 else:
                     print 'WARN: cannot parse omitted tasks pattern: ', data
         elif self.state == 'html->body->job->grid->task->':
@@ -1097,23 +1099,23 @@ def print_results_by_tradegroup (
 def print_tradegroup_in_results (
         results, 
         in_seconds, 
-        tradegroup_id
+        tradegroup_ids
     ):
-    tradegroup_id = str (tradegroup_id)
     for result in results:
-        if tradegroup_id in result.tradegroups:
-            print_tradegroup (
-                result.tradegroups[tradegroup_id],
-                in_seconds
-            )
-            break
+        for tradegroup_id in tradegroup_ids:
+            if tradegroup_id in result.tradegroups:
+                print_tradegroup (
+                    result.tradegroups[tradegroup_id],
+                    in_seconds
+                )
+                print
 
 def print_results (
         results, 
         in_seconds, 
         num_pricers, 
         num_tradegroups, 
-        print_tradegroup_id
+        print_tradegroup_ids
     ): 
     if num_pricers is not 0:
         net_result_by_pricer = group_results_by_pricer (results)
@@ -1125,9 +1127,9 @@ def print_results (
             results, in_seconds, num_tradegroups
         )
 
-    if print_tradegroup_id > -1:
+    if print_tradegroup_ids is not None and len(print_tradegroup_ids) > 0:
         print_tradegroup_in_results (
-            results, in_seconds, print_tradegroup_id
+            results, in_seconds, print_tradegroup_ids
         )
 
 #

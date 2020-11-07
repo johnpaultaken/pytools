@@ -174,7 +174,13 @@ class task_t(object):
         self.compute_time = compute_time
         self.start = '?'
         self.finish = '?'
+        self.cache_hit = 0
+        self.cache_miss = 0
+        self.mem_free_bytes = 0
         self.num_processors = 0
+        self.mem_total_bytes = 0
+        self.msg_warn_count = 0
+        self.msg_error_count = 0
         self.engine = '?'
 
 class trade_group_t(object):
@@ -425,9 +431,39 @@ class HTMLPerfReportParser(HTMLParser):
             r'\s*(\w+\-\d+)\s'
         )
 
+        # CacheHit = 7 
+        self.task_cache_hit_pattern = re.compile(
+            r'CacheHit\s*=\s*(\d+)\s*'
+        )
+
+        # CacheMiss = 3 
+        self.task_cache_miss_pattern = re.compile(
+            r'CacheMiss\s*=\s*(\d+)\s*'
+        )
+
+        # AvailablePhysicalMemoryInBytes = 150775894016 
+        self.task_mem_free_pattern = re.compile(
+            r'AvailablePhysicalMemoryInBytes\s*=\s*(\d+)\s*'
+        )
+
         # ProcessorCount = 20 
         self.task_procs_pattern = re.compile(
             r'ProcessorCount\s*=\s*(\d+)\s*'
+        )
+
+        # TotalPhysicalMemoryInBytes = 171762278400 
+        self.task_mem_total_pattern = re.compile(
+            r'TotalPhysicalMemoryInBytes\s*=\s*(\d+)\s*'
+        )
+
+        # File Warnings = 6 
+        self.task_msg_warn_pattern = re.compile(
+            r'File Warnings\s*=\s*(\d+)\s*'
+        )
+
+        # File Errors = 6 
+        self.task_msg_error_pattern = re.compile(
+            r'File Errors\s*=\s*(\d+)\s*'
         )
 
     #
@@ -639,10 +675,14 @@ class HTMLPerfReportParser(HTMLParser):
                 self.set_state ('html->body->job->grid->task->')
             elif self.state == 'html->body->job->grid->task->taskdetails':
                 self.set_state ('html->body->job->grid->task->taskdetails->')
+            elif self.state == 'html->body->job->grid->task->taskdetails->cache':
+                self.set_state ('html->body->job->grid->task->taskdetails->cache->')
             elif self.state == 'html->body->job->grid->task->taskdetails->hardware':
                 self.set_state ('html->body->job->grid->task->taskdetails->hardware->')
             elif self.state == 'html->body->job->grid->task->taskdetails->misc':
                 self.set_state ('html->body->job->grid->task->taskdetails->misc->')
+            elif self.state == 'html->body->job->grid->task->taskdetails->msg':
+                self.set_state ('html->body->job->grid->task->taskdetails->msg->')
 
         elif tag == 'li':
             if self.state not in self.li_counters:
@@ -698,11 +738,19 @@ class HTMLPerfReportParser(HTMLParser):
                 if self.li_counters[self.state] == 0:
                     self.set_state ('html->body->job->grid->task->')
                 self.li_counters[self.state] -= 1
+            elif self.state == 'html->body->job->grid->task->taskdetails->cache->':
+                if self.li_counters[self.state] == 0:
+                    self.set_state ('html->body->job->grid->task->taskdetails->')
+                self.li_counters[self.state] -= 1
             elif self.state == 'html->body->job->grid->task->taskdetails->hardware->':
                 if self.li_counters[self.state] == 0:
                     self.set_state ('html->body->job->grid->task->taskdetails->')
                 self.li_counters[self.state] -= 1
             elif self.state == 'html->body->job->grid->task->taskdetails->misc->':
+                if self.li_counters[self.state] == 0:
+                    self.set_state ('html->body->job->grid->task->taskdetails->')
+                self.li_counters[self.state] -= 1
+            elif self.state == 'html->body->job->grid->task->taskdetails->msg->':
                 if self.li_counters[self.state] == 0:
                     self.set_state ('html->body->job->grid->task->taskdetails->')
                 self.li_counters[self.state] -= 1
@@ -803,24 +851,66 @@ class HTMLPerfReportParser(HTMLParser):
             if 'Task Details' == data:
                 self.set_state ('html->body->job->grid->task->taskdetails')
         elif self.state == 'html->body->job->grid->task->taskdetails->':
-            if 'Hardware' == data:
+            if 'Cache' == data:
+                self.set_state ('html->body->job->grid->task->taskdetails->cache')
+            elif 'Hardware' == data:
                 self.set_state ('html->body->job->grid->task->taskdetails->hardware')
             elif 'Miscellaneous' == data:
                 self.set_state ('html->body->job->grid->task->taskdetails->misc')
+            elif 'NoOfMessages' == data:
+                self.set_state ('html->body->job->grid->task->taskdetails->msg')
+        elif self.state == 'html->body->job->grid->task->taskdetails->cache->':
+            if 'CacheHit' in data:
+                cache_hit_match = self.task_cache_hit_pattern.search(data)
+                if cache_hit_match:
+                    self.last_task.cache_hit = int (cache_hit_match.group(1))
+                else:
+                    print 'WARN: cannot parse task CacheHit pattern in: ', data
+            elif 'CacheMiss' in data:
+                cache_miss_match = self.task_cache_miss_pattern.search(data)
+                if cache_miss_match:
+                    self.last_task.cache_miss = int (cache_miss_match.group(1))
+                else:
+                    print 'WARN: cannot parse task CacheMiss pattern in: ', data
         elif self.state == 'html->body->job->grid->task->taskdetails->hardware->':
-            if 'ProcessorCount' in data:
+            if 'AvailablePhysicalMemoryInBytes' in data:
+                mem_free_match = self.task_mem_free_pattern.search(data)
+                if mem_free_match:
+                    self.last_task.mem_free_bytes = int (mem_free_match.group(1))
+                else:
+                    print 'WARN: cannot parse task AvailablePhysicalMemoryInBytes pattern in: ', data
+            elif 'ProcessorCount' in data:
                 procs_match = self.task_procs_pattern.search(data)
                 if procs_match:
                     self.last_task.num_processors = int (procs_match.group(1))
                 else:
-                    print 'WARN: cannot parse task num processors pattern in: ', data
+                    print 'WARN: cannot parse task ProcessorCount pattern in: ', data
+            elif 'TotalPhysicalMemoryInBytes' in data:
+                mem_total_match = self.task_mem_total_pattern.search(data)
+                if mem_total_match:
+                    self.last_task.mem_total_bytes = int (mem_total_match.group(1))
+                else:
+                    print 'WARN: cannot parse task TotalPhysicalMemoryInBytes pattern in: ', data
         elif self.state == 'html->body->job->grid->task->taskdetails->misc->':
             if 'engine logs' in data:
                 engine_match = self.task_engine_pattern.search(data)
                 if engine_match:
                     self.last_task.engine = engine_match.group(1)
                 else:
-                    print 'WARN: cannot parse task engine instance pattern in: ', data
+                    print 'WARN: cannot parse task EngineInstance pattern in: ', data
+        elif self.state == 'html->body->job->grid->task->taskdetails->msg->':
+            if 'File Warnings' in data:
+                msg_warn_match = self.task_msg_warn_pattern.search(data)
+                if msg_warn_match:
+                    self.last_task.msg_warn_count = int (msg_warn_match.group(1))
+                else:
+                    self.last_task.msg_warn_count = 0
+            elif 'File Errors' in data:
+                msg_error_match = self.task_msg_error_pattern.search(data)
+                if msg_error_match:
+                    self.last_task.msg_error_count = int (msg_error_match.group(1))
+                else:
+                    self.last_task.msg_error_count = 0
 
     #
     # Tasks after a certain limit are commented out in performance report.

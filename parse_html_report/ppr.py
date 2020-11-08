@@ -32,6 +32,12 @@ def init_options():
     )
 
     arg_parser.add_argument(
+        "-v",
+        help="verbose - print more information if available.",
+        action='store_true'
+    )
+
+    arg_parser.add_argument(
         "-s",
         help="seconds - print compute time in seconds.",
         action='store_true'
@@ -322,6 +328,7 @@ class HTMLPerfReportParser(HTMLParser):
             fn_print_task,          # function to be used to print the specified tasks
             in_seconds,             # show durations in seconds
             is_debug,               # print debug trace
+            is_verbose,             # print more information where available
             is_tradegroup_only,     # parse only html->body->job->jobdetails->tradegroup section
             alt_tradegroup_path,    # alternate perf report to use for trade groups 
                                     # if this report doesnt have tradegroup section
@@ -336,6 +343,7 @@ class HTMLPerfReportParser(HTMLParser):
         self.fn_print_task = fn_print_task
         self.in_seconds = in_seconds
         self.is_debug = is_debug
+        self.is_verbose = is_verbose
         self.is_tradegroup_only = is_tradegroup_only
         self.alt_tradegroup_path = alt_tradegroup_path
         self.results = results
@@ -660,7 +668,8 @@ class HTMLPerfReportParser(HTMLParser):
                                     None,
                                     None,
                                     self.in_seconds, 
-                                    self.is_debug, 
+                                    self.is_debug,
+                                    self.is_verbose,
                                     True, 
                                     None,  # third alternative can go here
                                     self.results
@@ -723,7 +732,8 @@ class HTMLPerfReportParser(HTMLParser):
                             self.fn_print_task (
                                 self.last_task, 
                                 tradegroup, 
-                                self.in_seconds
+                                self.in_seconds,
+                                self.is_verbose
                             )
                                 
                             self.remaining_tasks_to_parse -= 1
@@ -961,7 +971,8 @@ def parse_perfreport (
         print_num_tasks, 
         print_tasks_pricer,
         in_seconds, 
-        is_debug, 
+        is_debug,
+        is_verbose,
         alt_tradegroup_path, 
         results
 ):
@@ -977,7 +988,8 @@ def parse_perfreport (
                 print_tasks_pricer,
                 print_task,
                 in_seconds, 
-                is_debug, 
+                is_debug,
+                is_verbose,
                 False, 
                 alt_tradegroup_path, 
                 results
@@ -986,37 +998,85 @@ def parse_perfreport (
         
         perfreport_parser.feed(perfreport_html)
 
-def print_task (task, tradegroup, in_seconds):
+def print_task_select (task, tradegroup, in_seconds):
     if in_seconds:
-        print "{:<40}  {:>2} grid {:>7,} {:<18}({:>2})    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+        print "{:<40} {:>2} grid {:<7,} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3}".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time.to_seconds(),
-            task.engine,
-            task.num_processors,
             tradegroup.id,
             tradegroup.num_positions,
             task.paths,
+            task.engine,
+            task.num_processors,
+            (task.mem_total_bytes - task.mem_free_bytes)*100.0/task.mem_total_bytes,
+            task.cache_hit*100.0/float(task.cache_hit + task.cache_miss),
             task.status,
+            task.msg_error_count,
+            task.msg_warn_count
+        )
+    else:
+        print "{:<40} {:>2} grid {} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3}".format (
+            tradegroup.pricer,
+            ("MT" if tradegroup.cap_threads > 1 else "ST"),
+            task.compute_time,
+            tradegroup.id,
+            tradegroup.num_positions,
+            task.paths,
+            task.engine,
+            task.num_processors,
+            (task.mem_total_bytes - task.mem_free_bytes)*100.0/task.mem_total_bytes,
+            task.cache_hit*100.0/float(task.cache_hit + task.cache_miss),
+            task.status,
+            task.msg_error_count,
+            task.msg_warn_count
+        )
+
+def print_task_full (task, tradegroup, in_seconds):
+    if in_seconds:
+        print "{:<40} {:>2} grid {:<7,} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3} [{} - {}]".format (
+            tradegroup.pricer,
+            ("MT" if tradegroup.cap_threads > 1 else "ST"),
+            task.compute_time.to_seconds(),
+            tradegroup.id,
+            tradegroup.num_positions,
+            task.paths,
+            task.engine,
+            task.num_processors,
+            (task.mem_total_bytes - task.mem_free_bytes)*100.0/task.mem_total_bytes,
+            task.cache_hit*100.0/float(task.cache_hit + task.cache_miss),
+            task.status,
+            task.msg_error_count,
+            task.msg_warn_count,
             task.start,
             task.finish
         )
     else:
-        print "{:<40}  {:>2} grid {} {:<18}({:>2})    group {:<4}  positions {:<4}  paths {:^7}  {:<7}  [ {} - {} ]".format (
+        print "{:<40} {:>2} grid {} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3} [{} - {}]".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time,
-            task.engine,
-            task.num_processors,
             tradegroup.id,
             tradegroup.num_positions,
             task.paths,
+            task.engine,
+            task.num_processors,
+            (task.mem_total_bytes - task.mem_free_bytes)*100.0/task.mem_total_bytes,
+            task.cache_hit*100.0/float(task.cache_hit + task.cache_miss),
             task.status,
+            task.msg_error_count,
+            task.msg_warn_count,
             task.start,
             task.finish
         )
 
-def print_tradegroup (tradegroup, in_seconds):
+def print_task (task, tradegroup, in_seconds, is_verbose):
+    if is_verbose:
+        print_task_full (task, tradegroup, in_seconds)
+    else:
+        print_task_select (task, tradegroup, in_seconds)
+
+def print_tradegroup (tradegroup, in_seconds, is_verbose):
     # sort by grid compute time
     sorted_tasks = sorted (
         tradegroup.tasks,
@@ -1026,7 +1086,7 @@ def print_tradegroup (tradegroup, in_seconds):
 
     print
     for task in sorted_tasks:
-        print_task (task, tradegroup, in_seconds)
+        print_task (task, tradegroup, in_seconds, is_verbose)
 
 def group_result_by_pricer (
         result,
@@ -1073,7 +1133,8 @@ def process_input_file (
         print_num_tasks,
         print_tasks_pricer,
         in_seconds, 
-        is_debug, 
+        is_debug,
+        is_verbose,
         alt_tradegroup_path
 ):
     filepath = str(filepath)
@@ -1109,7 +1170,8 @@ def process_input_file (
             print_num_tasks,
             print_tasks_pricer,
             in_seconds, 
-            is_debug, 
+            is_debug,
+            is_verbose,
             alt_tradegroup_path,
             result
         )
@@ -1189,14 +1251,16 @@ def print_results_by_tradegroup (
 def print_tradegroup_in_results (
         results, 
         in_seconds, 
-        tradegroup_ids
+        tradegroup_ids,
+        is_verbose
     ):
     for result in results:
         for tradegroup_id in tradegroup_ids:
             if tradegroup_id in result.tradegroups:
                 print_tradegroup (
                     result.tradegroups[tradegroup_id],
-                    in_seconds
+                    in_seconds,
+                    is_verbose
                 )
                 print
 
@@ -1205,7 +1269,8 @@ def print_results (
         in_seconds, 
         num_pricers, 
         num_tradegroups, 
-        print_tradegroup_ids
+        print_tradegroup_ids,
+        is_verbose
     ): 
     if num_pricers is not 0:
         net_result_by_pricer = group_results_by_pricer (results)
@@ -1219,7 +1284,7 @@ def print_results (
 
     if print_tradegroup_ids is not None and len(print_tradegroup_ids) > 0:
         print_tradegroup_in_results (
-            results, in_seconds, print_tradegroup_ids
+            results, in_seconds, print_tradegroup_ids, is_verbose
         )
 
 #
@@ -1336,11 +1401,11 @@ if __name__ == "__main__":
 
     args = init_options()
 
-    results = process_input_file (args.f, args.tsc, args.tp, args.s, args.d, args.ftg)
+    results = process_input_file (args.f, args.tsc, args.tp, args.s, args.d, args.v, args.ftg)
     
     if args.fc is not None:
-        results_prev = process_input_file (args.fc, args.tsc, args.tp, args.s, args.d, args.fcftg)
+        results_prev = process_input_file (args.fc, args.tsc, args.tp, args.s, args.d, args.v, args.fcftg)
         
         print_results_compare (results, results_prev)
     else:
-        print_results (results, args.s, args.psc, args.gsc, args.ttg)
+        print_results (results, args.s, args.psc, args.gsc, args.ttg, args.v)

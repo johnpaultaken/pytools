@@ -1000,7 +1000,7 @@ def parse_perfreport (
 
 def print_task_select (task, tradegroup, in_seconds):
     if in_seconds:
-        print "{:<40} {:>2} grid {:<7,} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3}".format (
+        print "{:<40} {:>2} grid {:<7,} grp {:<4} pos {:<4} paths{:^14} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3}".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time.to_seconds(),
@@ -1016,7 +1016,7 @@ def print_task_select (task, tradegroup, in_seconds):
             task.msg_warn_count
         )
     else:
-        print "{:<40} {:>2} grid {} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3}".format (
+        print "{:<40} {:>2} grid {} grp {:<4} pos {:<4} paths{:^14} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3}".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time,
@@ -1034,7 +1034,7 @@ def print_task_select (task, tradegroup, in_seconds):
 
 def print_task_full (task, tradegroup, in_seconds):
     if in_seconds:
-        print "{:<40} {:>2} grid {:<7,} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3} [{} - {}]".format (
+        print "{:<40} {:>2} grid {:<7,} grp {:<4} pos {:<4} paths{:^14} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3} [{} - {}]".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time.to_seconds(),
@@ -1052,7 +1052,7 @@ def print_task_full (task, tradegroup, in_seconds):
             task.finish
         )
     else:
-        print "{:<40} {:>2} grid {} grp {:<4} pos {:<4} paths{:^7} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3} [{} - {}]".format (
+        print "{:<40} {:>2} grid {} grp {:<4} pos {:<4} paths{:^14} {:<18}({:>2})  mem{:6.2f}%  cache{:3.0f}% {:<7} err {:<3} warn {:<3} [{} - {}]".format (
             tradegroup.pricer,
             ("MT" if tradegroup.cap_threads > 1 else "ST"),
             task.compute_time,

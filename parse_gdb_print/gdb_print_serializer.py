@@ -67,13 +67,28 @@ def init_options():
     return arg_parser.parse_args()
 
 
+def pick_best_value (values):
+    if (len(values) > 1) and (values[1][0] == "'"):
+        return values[1]
+    else:
+        if (values[0][0] == '"'):
+            idx = values[0].find(r'\000')
+            if (idx != 1):
+                values[0] = values[0][0:idx] + '"'
+        return values[0]
+
 def serialize_name_value (name_stack, values, outf):
+    string_is_char_array = True
     if name_stack and values:
         lhs = name_stack[0]
         for name in name_stack[1:]:
             lhs += "."
             lhs += name
-        output = lhs + " = " + values[0] + ";"
+        value = pick_best_value(values)
+        if value[0] == '"' and string_is_char_array:
+            output = "strcpy (" + lhs + ", " + value + ");"
+        else:
+            output = lhs + " = " + value + ";"
         print (output)
 
 

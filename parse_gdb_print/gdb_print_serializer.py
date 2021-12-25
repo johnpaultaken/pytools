@@ -28,10 +28,13 @@ class tokenizer_t(object):
                     inside_double_quote = True
                 token += c
             elif c in self.special_char_tokens:
-                if token:
-                    tokens.append (token)
-                token = ""
-                tokens.append (c)
+                if inside_single_quote or inside_double_quote:
+                    token += c
+                else:
+                    if token:
+                        tokens.append (token)
+                    token = ""
+                    tokens.append (c)
             elif c.isspace():
                 if inside_single_quote or inside_double_quote:
                     token += c
